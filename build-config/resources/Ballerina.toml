@@ -1,0 +1,19 @@
+[package]
+authors = ["Ballerina"]
+distribution = "2201.12.0"
+keywords = ["Vendor/Google", "Area/AI & Machine Learning", "Type/Data Loader", "Type/Connector", "Name/Google Drive Data Loader"]
+license = ["Apache-2.0"]
+icon="icon.png"
+name = "ai.google.drive"
+org = "ballerinax"
+repository = "https://github.com/ballerina-platform/module-ballerinax-ai.google.drive"
+version = "@toml.version@"
+
+[platform.java21]
+graalvmCompatible = true
+
+[[platform.java21.dependency]]
+groupId = "io.ballerina.lib"
+artifactId = "ai.google.drive-native"
+version = "@toml.version@"
+path = "../native/build/libs/ai.google.drive-native-@project.version@.jar"
