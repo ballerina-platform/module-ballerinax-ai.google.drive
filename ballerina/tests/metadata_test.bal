@@ -42,22 +42,25 @@ isolated function testBuildMetadataFullFile() {
         id: "1AbCdEf",
         name: "report.pdf",
         mimeType: "application/pdf",
-        size: 20480,
+        webViewLink: "https://drive.google.com/file/d/1AbCdEf/view",
         createdTime: "2024-01-15T10:30:00.000Z",
         modifiedTime: "2024-02-20T08:00:00.000Z"
     };
     ai:Metadata metadata = buildMetadata(file);
     test:assertEquals(metadata.fileName, "report.pdf");
     test:assertEquals(metadata.mimeType, "application/pdf");
-    test:assertEquals(metadata.fileSize, <decimal>20480, "size (int) maps to fileSize (decimal)");
+    // `fileSize` is NOT taken from the file resource: Drive's `size` cannot be requested
+    // through the connector, so the loader derives it from the downloaded byte count instead.
+    test:assertTrue(metadata.fileSize is (), "fileSize is left to the caller, not read from `size`");
     test:assertTrue(metadata.createdAt !is (), "createdTime maps to createdAt");
     test:assertTrue(metadata.modifiedAt !is (), "modifiedTime maps to modifiedAt");
     test:assertEquals(metadata["fileId"], "1AbCdEf", "the Drive ID is retained as an extra field");
+    test:assertEquals(metadata["webUrl"], "https://drive.google.com/file/d/1AbCdEf/view",
+            "the citation URL back to Drive is retained");
 }
 
 @test:Config {}
 isolated function testBuildMetadataWorkspaceFileWithoutSize() {
-    // Google Workspace files typically report no `size`; it is then left unset.
     drive:File file = {
         id: "1Doc",
         name: "My Google Doc",

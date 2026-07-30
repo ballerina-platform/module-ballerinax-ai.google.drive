@@ -21,7 +21,7 @@ import ballerina/test;
 
 @test:Config {}
 isolated function testExtractTextFromPdfBytes() returns error? {
-    string text = check extractText(PDF_BYTES, "sample.pdf");
+    string text = check extractText(PDF_BYTES, "sample.pdf", MIME_PDF);
     test:assertTrue(text.includes(PDF_TEXT), text);
 }
 
@@ -29,32 +29,102 @@ isolated function testExtractTextFromPdfBytes() returns error? {
 
 @test:Config {}
 isolated function testExtractTextFromDocxBytes() returns error? {
-    string text = check extractText(DOCX_BYTES, "office-fixture.docx");
+    string text = check extractText(DOCX_BYTES, "office-fixture.docx", MIME_DOCX);
     test:assertTrue(text.includes(DOCX_TEXT), text);
 }
 
 @test:Config {}
 isolated function testExtractTextFromXlsxBytes() returns error? {
-    string text = check extractText(XLSX_BYTES, "office-report.xlsx");
+    string text = check extractText(XLSX_BYTES, "office-report.xlsx", MIME_XLSX);
     test:assertTrue(text.includes(XLSX_TEXT), text);
 }
 
 @test:Config {}
 isolated function testExtractTextFromPptxBytes() returns error? {
-    string text = check extractText(PPTX_BYTES, "office-report.pptx");
+    string text = check extractText(PPTX_BYTES, "office-report.pptx", MIME_PPTX);
     test:assertTrue(text.includes(PPTX_TEXT), text);
 }
 
 @test:Config {}
 isolated function testExtractTextFromXlsBytes() returns error? {
-    string text = check extractText(XLS_BYTES, "office-legacy.xls");
+    string text = check extractText(XLS_BYTES, "office-legacy.xls", MIME_XLS);
     test:assertTrue(text.includes(XLS_TEXT), text);
 }
 
 @test:Config {}
 isolated function testExtractTextFromPptBytes() returns error? {
-    string text = check extractText(PPT_BYTES, "office-legacy.ppt");
+    string text = check extractText(PPT_BYTES, "office-legacy.ppt", MIME_PPT);
     test:assertTrue(text.includes(PPT_TEXT), text);
+}
+
+@test:Config {}
+isolated function testExtractTextFromDocBytes() returns error? {
+    // `.doc` was advertised in EXTRACTABLE_EXTENSIONS/MIME_TYPES but had no fixture, so POI's
+    // HWPF path — distinct from HSSF (.xls) and HSLF (.ppt) — had never been exercised.
+    string text = check extractText(DOC_BYTES, "office-legacy.doc", MIME_DOC);
+    test:assertTrue(text.includes(DOC_TEXT), text);
+}
+
+@test:Config {}
+isolated function testExtractTextFromDocWithNoExtension() returns error? {
+    string text = check extractText(DOC_BYTES, "Legacy Memo", MIME_DOC);
+    test:assertTrue(text.includes(DOC_TEXT), text);
+}
+
+// ---- REGRESSION: parser selection follows the MIME type, not the extension ----
+// `classify` treats the Drive MIME type as authoritative, so the extractor must too.
+// Previously `selectParser` looked only at the file-name suffix, which meant every
+// MIME-classified Office/PDF file whose name lacked (or contradicted) the matching
+// extension was handed to the wrong parser and always failed.
+
+@test:Config {}
+isolated function testExtractTextFromDocxWithNoExtension() returns error? {
+    // Renaming a file in the Drive web UI drops the extension; the MIME type still says DOCX.
+    string text = check extractText(DOCX_BYTES, "Q3 Report", MIME_DOCX);
+    test:assertTrue(text.includes(DOCX_TEXT), text);
+}
+
+@test:Config {}
+isolated function testExtractTextFromLegacyXlsWithNoExtension() returns error? {
+    string text = check extractText(XLS_BYTES, "Legacy Sheet", MIME_XLS);
+    test:assertTrue(text.includes(XLS_TEXT), text);
+}
+
+@test:Config {}
+isolated function testExtractTextFromPdfNamedAsDocx() returns error? {
+    // A misnamed file: the extension says OOXML, the MIME type says PDF. The MIME type wins.
+    string text = check extractText(PDF_BYTES, "report.docx", MIME_PDF);
+    test:assertTrue(text.includes(PDF_TEXT), text);
+}
+
+@test:Config {}
+isolated function testExtractTextFallsBackToExtensionWithoutMimeType() returns error? {
+    // No MIME type at all: the extension is still honoured, as before.
+    string text = check extractText(DOCX_BYTES, "office-fixture.docx", "");
+    test:assertTrue(text.includes(DOCX_TEXT), text);
+}
+
+@test:Config {}
+isolated function testExtractTextFallsBackToExtensionForGenericMimeType() returns error? {
+    // Drive reports application/octet-stream for blobs it cannot type; fall back to the name.
+    string text = check extractText(PPTX_BYTES, "office-report.pptx", "application/octet-stream");
+    test:assertTrue(text.includes(PPTX_TEXT), text);
+}
+
+@test:Config {}
+isolated function testExtractTextIgnoresMimeTypeParameters() returns error? {
+    // A MIME type carrying parameters still matches on its base type.
+    string text = check extractText(PDF_BYTES, "no-extension", MIME_PDF + "; charset=binary");
+    test:assertTrue(text.includes(PDF_TEXT), text);
+}
+
+@test:Config {}
+isolated function testBuildDocumentExtensionlessDocxExtractsText() returns error? {
+    // End to end through buildDocument: this is the shape `classify` produces for an
+    // extension-less DOCX, and it previously failed with a PDFBox trailer error.
+    ai:Metadata metadata = {fileName: "Q3 Report", mimeType: MIME_DOCX};
+    ai:TextDocument doc = check buildDocument(DOCX_BYTES, EXTRACT_DOWNLOAD, metadata);
+    test:assertTrue(doc.content.includes(DOCX_TEXT), doc.content);
 }
 
 // ---- text-less PDF detection (scanned/image-only AND genuinely blank) ---------
@@ -63,9 +133,11 @@ isolated function testExtractTextFromPptBytes() returns error? {
 isolated function testExtractTextFromScannedPdfErrors() {
     // The scanned fixture parses fine but has no text layer; the extractor must surface
     // a descriptive error rather than silently returning an empty string.
-    string|error text = extractText(SCANNED_PDF_BYTES, "scan.pdf");
+    string|error text = extractText(SCANNED_PDF_BYTES, "scan.pdf", MIME_PDF);
     if text is error {
-        test:assertTrue(text.message().includes(TEXTLESS_PDF_SENTINEL), text.message());
+        test:assertTrue(isTextlessPdfError(text), text.message());
+        test:assertTrue(text.message().includes("no extractable text"),
+                "the message stays human-readable: " + text.message());
     } else {
         test:assertFail("A scanned (image-only) PDF should surface a descriptive error");
     }
@@ -76,9 +148,9 @@ isolated function testExtractTextFromBlankPdfErrors() {
     // A genuinely blank PDF (empty content stream — no text, no images) yields the same
     // neutral error: the loader cannot tell "scan" from "blank" without OCR, and both are
     // equally unusable as text.
-    string|error text = extractText(BLANK_PDF_BYTES, "blank.pdf");
+    string|error text = extractText(BLANK_PDF_BYTES, "blank.pdf", MIME_PDF);
     if text is error {
-        test:assertTrue(text.message().includes(TEXTLESS_PDF_SENTINEL), text.message());
+        test:assertTrue(isTextlessPdfError(text), text.message());
     } else {
         test:assertFail("A blank PDF should surface a descriptive error, not an empty document");
     }
@@ -89,8 +161,9 @@ isolated function testBuildDocumentTextlessPdfErrors() {
     ai:Metadata metadata = {fileName: "scan.pdf", mimeType: "application/pdf"};
     ai:TextDocument|ai:Error result = buildDocument(SCANNED_PDF_BYTES, EXTRACT_DOWNLOAD, metadata);
     if result is ai:Error {
-        test:assertTrue(result.message().includes(TEXTLESS_PDF_SENTINEL), result.message());
+        // The reason travels on the CAUSE here: buildDocument wraps the native error.
         test:assertTrue(isTextlessPdfError(result), "The error must be recognisable as text-less PDF");
+        test:assertTrue(result.message().includes("no extractable text"), result.message());
     } else {
         test:assertFail("Building a document from a text-less PDF should error, not skip or succeed");
     }
@@ -100,6 +173,25 @@ isolated function testBuildDocumentTextlessPdfErrors() {
 isolated function testIsTextlessPdfErrorRejectsOtherErrors() {
     test:assertFalse(isTextlessPdfError(error("some unrelated extraction failure")));
     test:assertFalse(isTextlessPdfError(error("Failed to decode text content")));
+}
+
+@test:Config {}
+isolated function testIsTextlessPdfErrorIgnoresTheMessageText() {
+    // REGRESSION: classification used to be `err.message().includes("no extractable text")`,
+    // so any unrelated error whose message happened to contain that phrase was silently
+    // treated as a skippable text-less PDF. Only the structured `reason` detail counts now.
+    error lookalike = error("the archive has no extractable text entries");
+    test:assertFalse(isTextlessPdfError(lookalike),
+            "a message that merely contains the phrase is not a text-less PDF");
+}
+
+@test:Config {}
+isolated function testIsTextlessPdfErrorMatchesTheStructuredReason() {
+    // Conversely, the reason alone is sufficient — no particular wording required.
+    error structured = error("wholly different wording", reason = TEXTLESS_PDF_REASON);
+    test:assertTrue(isTextlessPdfError(structured), "the structured reason is what classifies");
+    test:assertTrue(isTextlessPdfError(error("wrapped", structured)),
+            "and it is found through the cause chain");
 }
 
 @test:Config {}

@@ -59,13 +59,27 @@ public type Source record {|
     string[]? includeExtensions = ();
 |};
 
-// The Drive `File` metadata fields the loader requests via `getFile`. `getAllFiles`
-// (listing) returns only id/name/mimeType, so the timestamps needed for `ai:Metadata` are
-// fetched explicitly per file with this field mask.
+// A source with its URLs already resolved to Drive IDs. Resolution and the "at most one of
+// folderId/folderUrl" check happen in `init`, so a misconfigured source fails immediately
+// rather than part-way through a long load, after documents have already been fetched.
+type ResolvedSource record {|
+    string? folderId;
+    string[] fileIds;
+    boolean recursive;
+    string[]? includeExtensions;
+|};
+
+
+// The Drive `File` metadata fields the loader requests via `getFile`. `getAllFiles` (listing)
+// returns only the default projection, so the timestamps needed for `ai:Metadata` are fetched
+// explicitly per file with this field mask.
 //
-// `size` is deliberately NOT requested: the Drive API serializes it as a JSON string (an
-// int64), but the `googleapis.drive` connector types `File.size` as `int`, so asking for it
-// makes the connector's `cloneWithType(File)` fail with "Error occurred while constructing
+// `size` is deliberately NOT requested: the Drive API serialises it as a JSON string (it is an
+// int64), but the `googleapis.drive` connector types `File.size` as `int`, so asking for it makes
+// the connector's `cloneWithType(File)` fail with "Error occurred while constructing
 // DriveResponse record." `ai:Metadata.fileSize` is instead derived from the downloaded byte
 // length in `fetchAndBuild` (accurate for binary files; left unset for exported Workspace docs).
-const string FILE_FIELDS = "id,name,mimeType,createdTime,modifiedTime,trashed";
+//
+// `webViewLink` gives a downstream RAG pipeline a citation URL back to the source document, and
+// Drive returns it in the same response, so it costs nothing to carry.
+const string FILE_FIELDS = "id,name,mimeType,createdTime,modifiedTime,trashed,webViewLink";

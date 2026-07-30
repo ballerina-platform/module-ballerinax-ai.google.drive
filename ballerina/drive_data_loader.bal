@@ -22,9 +22,9 @@ import ballerinax/googleapis.drive;
 #
 # Google Workspace native files (Docs/Sheets/Slides) are exported to a textual format
 # (`text/plain` / `text/csv`); ordinary binary files (pdf, txt, md, csv, …) are downloaded.
-# PDFs — whether an uploaded binary or a Workspace file — have their text extracted via
-# Apache Tika. See the module documentation for the ID-based `Source` model and the
-# supported/exported/unsupported file types.
+# PDFs and uploaded Microsoft Office documents have their text extracted via Apache Tika.
+# See the module documentation for the ID-based `Source` model and the supported/exported/
+# unsupported file types.
 @display {
     label: "Google Drive Text Data Loader"
 }
@@ -32,7 +32,7 @@ public isolated class TextDataLoader {
     *ai:DataLoader;
 
     private final drive:Client driveClient;
-    private final readonly & Source[] sources;
+    private final readonly & ResolvedSource[] sources;
 
     # Initializes the Google Drive data loader.
     #
@@ -49,17 +49,41 @@ public isolated class TextDataLoader {
     # client, token acquisition and refresh likewise stay the caller's concern — the loader
     # only issues requests through the client it is given.
     #
+    # Every source is fully validated here rather than at load time: share URLs are resolved to
+    # Drive IDs and the "at most one of `folderId`/`folderUrl`" rule is enforced, so a
+    # misconfigured source fails immediately instead of part-way through a long load, after
+    # documents have already been fetched and then discarded.
+    #
     # + connection - The Google Drive connector configuration shared by all sources, or an
     #                existing `drive:Client` to reuse (not owned by the loader)
     # + sources - One or more Drive folders and/or file IDs to load documents from
-    # + return - An `ai:Error` if the loader could not be initialized
-    public isolated function init(@display {label: "Connection"} drive:ConnectionConfig|drive:Client connection,
+    # + return - An `ai:Error` if the connection could not be established or a source is invalid
+    public isolated function init(
+            @display {label: "Connection"} drive:ConnectionConfig|drive:Client connection,
             @display {label: "Data Sources"} Source[] sources) returns ai:Error? {
         // Validated before the connection is resolved, so it applies to both forms.
         if sources.length() == 0 {
             return error ai:Error("At least one source must be provided to the Google Drive data loader");
         }
-        self.sources = sources.cloneReadOnly();
+        ResolvedSource[] resolved = [];
+        foreach Source src in sources {
+            string? folderId = check resolveFolderId(src);
+            string[] fileIds = check resolveFileIds(src);
+            // A source that names nothing loads nothing. Silently returning zero documents here
+            // while an empty `sources` array is a hard error would give the caller the same
+            // outcome from a clear failure in one case and total silence in the other.
+            if folderId is () && fileIds.length() == 0 {
+                log:printWarn("A Google Drive source selects nothing and will load no documents; " +
+                        "set one of 'folderId', 'folderUrl', 'fileIds' or 'fileUrls'");
+            }
+            resolved.push({
+                folderId,
+                fileIds,
+                recursive: src.recursive,
+                includeExtensions: src.includeExtensions
+            });
+        }
+        self.sources = resolved.cloneReadOnly();
         self.driveClient = connection is drive:Client ? connection : check newDriveClient(connection);
     }
 
@@ -69,16 +93,16 @@ public isolated class TextDataLoader {
     #            otherwise, or an `ai:Error` on failure
     public isolated function load() returns ai:Document[]|ai:Document|ai:Error {
         ai:Document[] documents = [];
-        foreach Source src in self.sources {
-            // Resolve any share URLs (`fileUrls`/`folderUrl`) to Drive IDs, combined with the
-            // IDs given directly. From here on the loader is purely ID-based.
-            // Explicitly named files are always loaded (subject to being a supported type)
-            // and bypass the extension filter — the filter applies to folder listings only.
-            foreach string fileId in check resolveFileIds(src) {
+        // Sources arrive already resolved to Drive IDs (see `init`), so the load path is purely
+        // ID-based and cannot fail on a configuration mistake half-way through.
+        foreach ResolvedSource src in self.sources {
+            // Explicitly named files are always loaded (subject to being a supported type) and
+            // bypass the extension filter — the filter applies to folder listings only.
+            foreach string fileId in src.fileIds {
                 ai:TextDocument document = check self.loadNamedFile(fileId);
                 documents.push(document);
             }
-            string? folderId = check resolveFolderId(src);
+            string? folderId = src.folderId;
             if folderId is string {
                 ai:Document[] loaded = check self.loadFolder(folderId, src.recursive, src.includeExtensions);
                 documents.push(...loaded);
@@ -97,6 +121,12 @@ public isolated class TextDataLoader {
         drive:File file = check self.getFileMetadata(fileId);
         if file.trashed == true {
             return error ai:Error(string `File ID '${fileId}' is in the trash and cannot be loaded`);
+        }
+        // A folder ID in `fileIds` classifies as UNSUPPORTED, so without this it would be
+        // reported as an unsupported file type — true but unhelpful. Name the actual mistake.
+        if file.mimeType == GOOGLE_FOLDER_MIME {
+            return error ai:Error(string `The ID '${fileId}' refers to a folder, not a file; ` +
+                string `use 'folderId' (or 'folderUrl') to load a folder's contents`);
         }
         FileClass fileClass = classify(file.mimeType, file.name ?: "");
         if !isSupported(fileClass) {
@@ -119,17 +149,31 @@ public isolated class TextDataLoader {
             return error ai:Error(string `The ID '${folderId}' does not refer to a folder ` +
                 string `(its MIME type is '${folder.mimeType ?: "unknown"}')`);
         }
+        // Same typo/intent detection `loadNamedFile` applies: a trashed folder lists no
+        // children, so without this check it would silently return zero documents.
+        if folder.trashed == true {
+            return error ai:Error(
+                string `Folder ID '${folderId}' is in the trash and cannot be loaded`);
+        }
         return self.listFolder(folderId, recursive, includeExtensions);
     }
 
     // Lists a folder's children as documents and, when `recursive`, descends into each
-    // sub-folder. Trashed files are excluded by the query. Files that cannot be represented
-    // as text are skipped with a logged warning (contrast `loadNamedFile`, which errors).
+    // sub-folder. Trashed files are excluded by the query.
+    //
+    // Every per-file failure inside a listing is skipped with a logged warning, never
+    // propagated: one unreadable file must not discard the documents already collected, nor
+    // abandon the rest of the folder. A single non-UTF-8 `.txt`, one corrupt PDF, or one 403
+    // on one file would otherwise throw away an entire bulk ingestion.
+    //
+    // An explicitly named file (`loadNamedFile`) still errors — naming a file expresses intent,
+    // so failing to load it is a mistake worth reporting rather than a silent skip.
     private isolated function listFolder(string folderId, boolean recursive, string[]? includeExtensions)
             returns ai:Document[]|ai:Error {
         drive:File[] children = check self.listChildren(folderId);
 
         ai:Document[] documents = [];
+        int skipped = 0;
         foreach drive:File child in children {
             string childMime = child.mimeType ?: "";
             string childName = child.name ?: "";
@@ -144,29 +188,49 @@ public isolated class TextDataLoader {
             if !isSupported(fileClass) {
                 log:printWarn("Skipping a non-text Google Drive file",
                         fileName = childName, mimeType = childMime, folderId = folderId);
+                skipped += 1;
                 continue;
             }
-            // The listing carries only id/name/mimeType; fetch full metadata (size,
-            // timestamps) for the supported files that will actually become documents.
             string? childId = child.id;
             if childId is () {
+                // Drive addresses everything by ID; a child without one cannot be fetched.
+                log:printWarn("Skipping a Google Drive file that has no identifier",
+                        fileName = childName, folderId = folderId);
+                skipped += 1;
                 continue;
             }
-            drive:File full = check self.getFileMetadata(childId);
+            // `getAllFiles` accepts no field mask, so the listing carries only Drive's default
+            // projection (id/name/mimeType/kind). The timestamps `ai:Metadata` needs therefore
+            // cost one `files.get` per child that will actually become a document — an N+1 that
+            // cannot be avoided through the connector.
+            drive:File|ai:Error full = self.getFileMetadata(childId);
+            if full is ai:Error {
+                log:printWarn("Skipping a Google Drive file whose metadata could not be retrieved",
+                        fileName = childName, fileId = childId, folderId = folderId,
+                        reason = full.message());
+                skipped += 1;
+                continue;
+            }
             ai:TextDocument|ai:Error document = self.fetchAndBuild(full, fileClass);
             if document is ai:Error {
-                // A text-less PDF (scanned/image-only or blank) has no text to extract;
-                // inside a listing it is skipped like other non-text content rather than
-                // aborting the whole walk. (An explicitly named one still surfaces the
-                // descriptive error to the caller.)
-                if isTextlessPdfError(document) {
-                    log:printWarn("Skipping a PDF with no extractable text content",
-                            fileName = childName, fileId = childId, folderId = folderId);
-                    continue;
-                }
-                return document;
+                // Any reason at all: a text-less (scanned or blank) PDF, content that will not
+                // decode, an export above Drive's 10 MB cap, a file flagged as abusive, a 403 on
+                // this one file. The walk continues either way.
+                log:printWarn("Skipping a Google Drive file that could not be loaded",
+                        fileName = childName, fileId = childId, folderId = folderId,
+                        reason = document.message());
+                skipped += 1;
+                continue;
             }
             documents.push(document);
+        }
+
+        // A folder where everything was skipped otherwise looks identical to an empty folder:
+        // the caller gets an empty array and would have to read the logs line by line to tell
+        // the difference. Summarise it once instead.
+        if skipped > 0 {
+            log:printWarn("Some Google Drive files in this folder were skipped",
+                    folderId = folderId, loaded = documents.length(), skipped = skipped);
         }
 
         if recursive {
@@ -190,33 +254,62 @@ public isolated class TextDataLoader {
     // would fail with `fileNotExportable`; it must go through `exportFile`.
     private isolated function fetchAndBuild(drive:File file, FileClass fileClass)
             returns ai:TextDocument|ai:Error {
-        string fileId = file.id ?: "";
         string fileName = file.name ?: "<unnamed>";
+        // Drive addresses everything by ID, so a file without one cannot be fetched at all.
+        // Substituting "" here would request a nonsense path and surface whatever confusing
+        // error Drive returns for it, instead of naming the actual problem.
+        string? id = file.id;
+        if id is () {
+            return error ai:Error(
+                string `Encountered a Google Drive file without an identifier (name '${fileName}')`);
+        }
+        string fileId = id;
         byte[] content;
+        // The `Content-Type` of the fetched bytes, whose charset (when Drive reports one)
+        // decides how a text download is decoded. `drive:FileContent` carries it verbatim.
+        string contentType;
         if requiresExport(fileClass) {
-            string exportMimeType = exportMimeTypeFor(fileClass) ?: EXPORT_MIME_TEXT;
+            // `requiresExport` is true only for WORKSPACE_TEXT/WORKSPACE_CSV, and both have an
+            // export target, so this is unreachable. Surface it rather than silently defaulting
+            // to `text/plain`, which would export a Sheet in the wrong format.
+            string? exportTarget = exportMimeTypeFor(fileClass);
+            if exportTarget is () {
+                return error ai:Error(string `Internal error: file '${fileName}' (ID '${fileId}') ` +
+                    string `was routed to the export path but has no export target MIME type`);
+            }
+            string exportMimeType = exportTarget;
             drive:FileContent|error exported = self.driveClient->exportFile(fileId, exportMimeType);
             if exported is error {
+                string? named = describeContentFailure(exported, fileName, fileId);
+                if named is string {
+                    return error ai:Error(named, exported);
+                }
                 return error ai:Error(string `Failed to export Google Workspace file '${fileName}' ` +
                     string `(ID '${fileId}') as '${exportMimeType}': ${exported.message()}`, exported);
             }
             content = exported.content;
+            contentType = exported.mimeType;
         } else {
             drive:FileContent|error downloaded = self.driveClient->getFileContent(fileId);
             if downloaded is error {
-                return error ai:Error(string `Failed to download file '${fileName}' (ID '${fileId}'): ` +
-                    string `${downloaded.message()}`, downloaded);
+                string? named = describeContentFailure(downloaded, fileName, fileId);
+                if named is string {
+                    return error ai:Error(named, downloaded);
+                }
+                return error ai:Error(string `Failed to download file '${fileName}' ` +
+                    string `(ID '${fileId}'): ${downloaded.message()}`, downloaded);
             }
             content = downloaded.content;
+            contentType = downloaded.mimeType;
         }
         ai:Metadata metadata = buildMetadata(file);
-        // Drive's `size` field cannot be requested (see FILE_FIELDS), so for a downloaded
-        // binary file the byte count IS the file size. An exported Workspace file's export
-        // length is not the source file's size, so it is left unset there.
+        // Drive's `size` cannot be requested through the connector (see `FILE_FIELDS`), so for a
+        // downloaded binary file the byte count IS the file size. An exported Workspace file's
+        // export length is not the source file's size, so it is left unset there.
         if !requiresExport(fileClass) {
             metadata.fileSize = <decimal>content.length();
         }
-        return buildDocument(content, fileClass, metadata);
+        return buildDocument(content, fileClass, metadata, contentType);
     }
 
     // Retrieves a file's metadata with the loader's field mask, mapping a missing file to a
@@ -237,15 +330,37 @@ public isolated class TextDataLoader {
     // items via the Drive `q` filter. The connector's `getAllFiles` handles pagination
     // internally, so consuming the returned stream yields every child across all pages.
     private isolated function listChildren(string folderId) returns drive:File[]|ai:Error {
-        string filter = string `'${folderId}' in parents and trashed = false`;
-        stream<drive:File>|error fileStream = self.driveClient->getAllFiles(filter);
+        stream<drive:File>|error fileStream = self.driveClient->getAllFiles(childrenQuery(folderId));
         if fileStream is error {
+            if isNotFoundError(fileStream) {
+                return error ai:Error(string `Folder not found for ID '${folderId}'`, fileStream);
+            }
             return error ai:Error(
-                string `Failed to list children of folder '${folderId}': ${fileStream.message()}`, fileStream);
+                string `Failed to list children of folder '${folderId}': ${fileStream.message()}`,
+                fileStream);
         }
-        return from drive:File file in fileStream
+        drive:File[]|error children = from drive:File file in fileStream
             select file;
+        if children is error {
+            // Pagination happens while the stream is consumed, so a failure on any page after
+            // the first surfaces here rather than from `getAllFiles`.
+            return error ai:Error(
+                string `Failed to list children of folder '${folderId}': ${children.message()}`,
+                children);
+        }
+        return children;
     }
+}
+
+// Builds the Drive `q` filter selecting a folder's untrashed children.
+//
+// The ID is interpolated into a single-quoted literal, so an embedded `'` would close the
+// literal early and produce a malformed query. Drive's search syntax escapes it with a
+// backslash (https://developers.google.com/workspace/drive/api/guides/search-files). Real
+// Drive IDs are opaque base64url and contain no quotes, but an ID can come from caller input.
+isolated function childrenQuery(string folderId) returns string {
+    string escaped = re `'`.replaceAll(folderId, "\\'");
+    return string `'${escaped}' in parents and trashed = false`;
 }
 
 // Resolves a source's folder to a single Drive ID from `folderId` or `folderUrl` (a URL is

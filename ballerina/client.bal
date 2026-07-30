@@ -15,14 +15,50 @@
 // under the License.
 
 import ballerina/ai;
+import ballerina/http;
 import ballerinax/googleapis.drive;
+
+// Google documents exponential backoff as the required response to rate limiting
+// (https://developers.google.com/workspace/drive/api/guides/handle-errors). Drive reports
+// throttling as 403 `rateLimitExceeded`/`userRateLimitExceeded` as well as 429, and
+// `http:RetryConfig` can only match on the status code, not the `reason` — so 403 is included
+// here. The cost is that a genuine permissions 403 is retried before it fails; the alternative
+// (no retry on the most common throttle signal) fails whole bulk loads.
+final http:RetryConfig & readonly DEFAULT_RETRY_CONFIG = {
+    interval: 1,
+    count: 4,
+    backOffFactor: 2.0,
+    maxWaitInterval: 20,
+    statusCodes: [403, 429, 500, 502, 503, 504]
+};
+
+// A backstop for content whose size Drive does not report up front (notably Workspace exports,
+// which carry no `size`). Unset, `maxEntityBodySize` defaults to -1, i.e. unlimited, so a single
+// huge file would be read wholly into memory.
+final http:ResponseLimitConfigs & readonly DEFAULT_RESPONSE_LIMITS = {
+    maxEntityBodySize: 104857600
+};
 
 // Constructs the Google Drive `Client` from the connector's own `ConnectionConfig`
 // (OAuth2 refresh-token grant or a bearer token), wrapping any construction failure as an
 // `ai:Error`. The loader consumes the connector's config type directly rather than
-// re-declaring one, so callers configure auth exactly as they would for the connector.
+// re-declaring one, so callers configure auth exactly as they would for the connector, and a
+// caller who already holds a `drive:Client` can hand that over instead.
+//
+// `retryConfig` and `responseLimits` are optional on the connector's config and unset by
+// default, which leaves a bulk load with no retry at all over Drive's throttling and an
+// unbounded response body. Both are filled in here when the caller supplied neither — an
+// explicit value always wins, including one that deliberately disables retrying.
 isolated function newDriveClient(drive:ConnectionConfig config) returns drive:Client|ai:Error {
-    drive:Client|error driveClient = new (config);
+    // Cloned before defaulting so the caller's own record is never mutated.
+    drive:ConnectionConfig effective = config.clone();
+    if effective.retryConfig is () {
+        effective.retryConfig = DEFAULT_RETRY_CONFIG;
+    }
+    if effective.responseLimits is () {
+        effective.responseLimits = DEFAULT_RESPONSE_LIMITS;
+    }
+    drive:Client|error driveClient = new (effective);
     if driveClient is error {
         return error ai:Error(
             string `Failed to initialize the Google Drive client: ${driveClient.message()}`, driveClient);
@@ -30,13 +66,23 @@ isolated function newDriveClient(drive:ConnectionConfig config) returns drive:Cl
     return driveClient;
 }
 
-// Reports whether a connector error denotes a missing file/folder. The `googleapis.drive`
-// connector surfaces Drive's HTTP 404 as a generic `error` (it does not define a typed
-// NotFoundError), so the loader matches on the error message. Drive's not-found responses
-// carry either "File not found" / "notFound" or a bare 404 status, so those fragments are
-// checked. Used to turn a mistyped file/folder ID into a clear "not found" error.
-isolated function isNotFoundError(error err) returns boolean {
-    string message = err.message().toLowerAscii();
-    return message.includes("file not found") || message.includes("notfound")
-        || message.includes("not found") || message.includes("404");
+// Names the two Drive content refusals that are common and opaque enough to be worth
+// translating, leaving anything else to be reported as the connector phrased it.
+//
+// The connector surfaces a content failure as `error(<raw response body>)` (see
+// `generateRecordFileContent`), so Drive's reason string is present in the message but the
+// status code and the structured JSON are both gone — matching the reason text is the only
+// signal available. A file inside a folder listing is skipped with its message logged, so that
+// message is all an operator sees; a wall of Drive's JSON would be unreadable at bulk-load scale.
+isolated function describeContentFailure(error err, string fileName, string fileId) returns string? {
+    string body = err.message();
+    if body.includes("exportSizeLimitExceeded") {
+        return string `Cannot export '${fileName}' (ID '${fileId}'): it exceeds the 10 MB limit ` +
+            string `Google Drive applies to a single export`;
+    }
+    if body.includes("cannotDownloadAbusiveFile") {
+        return string `Google Drive has flagged '${fileName}' (ID '${fileId}') as abusive and ` +
+            string `refuses to serve it`;
+    }
+    return ();
 }

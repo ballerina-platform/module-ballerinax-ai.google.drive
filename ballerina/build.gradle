@@ -67,6 +67,9 @@ task updateTomlFiles {
         newBallerinaToml = newBallerinaToml.replace("@commonsCompressVersion@", project.commonsCompressVersion)
         newBallerinaToml = newBallerinaToml.replace("@sparseBitSetVersion@", project.sparseBitSetVersion)
         newBallerinaToml = newBallerinaToml.replace("@log4jVersion@", project.log4jVersion)
+        newBallerinaToml = newBallerinaToml.replace("@commonsCodecVersion@", project.commonsCodecVersion)
+        newBallerinaToml = newBallerinaToml.replace("@curvesapiVersion@", project.curvesapiVersion)
+        newBallerinaToml = newBallerinaToml.replace("@commonsMath3Version@", project.commonsMath3Version)
         ballerinaTomlFile.text = newBallerinaToml
     }
 }

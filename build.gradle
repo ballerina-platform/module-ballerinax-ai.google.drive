@@ -17,9 +17,6 @@
  */
 
 plugins {
-    id "com.github.spotbugs-base"
-    id 'com.github.johnrengelman.shadow'
-    id 'de.undercouch.download'
     id 'net.researchgate.release'
 }
 
@@ -60,12 +57,11 @@ allprojects {
 
 def moduleVersion = project.version.replace("-SNAPSHOT", "")
 
+// The Ballerina sub-project already declares `build.dependsOn ':ai.google.drive-native:build'`
+// (ballerina/build.gradle), which both pulls in the native jar and imposes the build ordering.
 task build {
-    dependsOn(':ai.google.drive-native:build')
     dependsOn(':ai.google.drive-ballerina:build')
 }
-
-tasks.findByPath(':ai.google.drive-ballerina:build').mustRunAfter(':ai.google.drive-native:build')
 
 release {
     buildTasks = ['build']

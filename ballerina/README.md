@@ -2,7 +2,7 @@
 
 The `ballerinax/ai.google.drive` package provides a [`ai:DataLoader`](https://central.ballerina.io/ballerina/ai/latest) implementation that loads files from [Google Drive](https://www.google.com/drive/) and returns them as `ai:TextDocument`s — ready to chunk, embed, and index in a Ballerina AI / RAG pipeline.
 
-It builds on the [`ballerinax/googleapis.drive`](https://central.ballerina.io/ballerinax/googleapis.drive/latest) connector and consumes that connector's own `ConnectionConfig` directly, so authentication is configured exactly as it is for the connector.
+The package is built on the [`ballerinax/googleapis.drive`](https://central.ballerina.io/ballerinax/googleapis.drive/latest) connector, so authentication and connection settings are configured exactly as they are for that connector, and a caller who already holds a `drive:Client` can hand it straight to the loader. The connector's own constraints are inherited along with it — see [Limitations](#limitations).
 
 ## Overview
 
@@ -10,7 +10,7 @@ It builds on the [`ballerinax/googleapis.drive`](https://central.ballerina.io/ba
 
 - **Google Workspace native files** (Docs, Sheets, Slides) have no downloadable bytes, so they are **exported** to a textual format — a Doc/Slides to `text/plain`, a Sheet to `text/csv`.
 - **Uploaded PDF and Microsoft Office files** (`pdf`, `docx`, `xlsx`, `pptx`, `doc`, `xls`, `ppt`) are **downloaded** and their text is extracted with [Apache Tika](https://tika.apache.org/) — PDFBox for PDFs, Apache POI for Office documents. (An uploaded `report.docx` is a different thing from a Google Doc: the former is extracted, the latter is exported.)
-- **Textual binary files** (`txt`, `md`, `csv`, `json`, …) are **downloaded** and decoded as UTF-8.
+- **Textual binary files** (`txt`, `md`, `csv`, `json`, …) are **downloaded** and decoded to text.
 
 Because Drive addresses everything by an opaque **ID** (a folder is just a file whose MIME type is `application/vnd.google-apps.folder`), sources are expressed by ID rather than by path.
 
@@ -27,15 +27,15 @@ Each `Source` selects content by ID **or by share URL**, in ways that may be com
 | `recursive` | Whether sub-folders under the resolved folder are traversed (default `false`). |
 | `includeExtensions` | Case-insensitive extension allowlist applied to **folder listings only**. Entries may include or omit a leading dot. Note: Workspace files have no extension, so an allowlist excludes them from listings. |
 
-A source with none of `folderId`/`folderUrl`/`fileIds`/`fileUrls` loads nothing.
+A source with none of `folderId`/`folderUrl`/`fileIds`/`fileUrls` loads nothing, and logs a warning saying so.
 
-> **IDs vs URLs:** internally the loader is ID-based; the URL fields are a convenience that
-> resolve a Drive share link to its ID via the exported `driveIdFromUrl(urlOrId)` function
-> (which also passes a bare ID through unchanged, and errors on a URL with no recognisable ID).
+Every source is validated when the loader is **constructed**, not when `load()` runs: share URLs are resolved to IDs and the "at most one of `folderId`/`folderUrl`" rule is enforced up front, so a configuration mistake fails immediately rather than part-way through a long load.
+
+> **IDs vs URLs:** internally the loader is ID-based; the URL fields are a convenience.
 > A folder ID is the last path segment of `https://drive.google.com/drive/folders/<id>`; a file
 > ID is the `<id>` in `https://drive.google.com/file/d/<id>/view` (or `.../d/<id>/edit` for Docs
 > Editors files, or the `id=` parameter of an `open?id=<id>` link). A link identifies a file but
-> does **not** grant access — reading still requires that your OAuth2 credentials can see it.
+> does **not** grant access — reading still requires that your credentials can see it.
 
 ## Return contract
 
@@ -45,44 +45,74 @@ A source with none of `folderId`/`folderUrl`/`fileIds`/`fileUrls` loads nothing.
 
 | Category | Types | How |
 | --- | --- | --- |
-| **Exported** (Workspace natives) | Google Docs, Google Slides | `exportFile` → `text/plain` → used verbatim |
-| **Exported** (Workspace natives) | Google Sheets | `exportFile` → `text/csv` (**first sheet only** — a Google limitation) |
-| **Downloaded + decoded** | `txt`, `text`, `md`, `markdown`, `csv`, `tsv`, `json`, `xml`, `html`, `htm`, `yaml`, `yml`, `log`, `ini`, `conf`, `properties`, `css`, `js`, `ts`, plus any `text/*` MIME type | `getFileContent` → UTF-8 decode |
-| **Downloaded + extracted** | `pdf` | `getFileContent` → Apache Tika (PDFBox) |
-| **Downloaded + extracted** | uploaded Microsoft Office: `docx`, `xlsx`, `pptx` (OOXML) and `doc`, `xls`, `ppt` (legacy OLE2) | `getFileContent` → Apache Tika (POI) |
-| **Unsupported (skipped/error)** | images, audio, other Google Apps types (Forms, Drawings, Sites, …), unknown binary | — |
+| **Exported** (Workspace natives) | Google Docs, Google Slides | export → `text/plain` → used verbatim |
+| **Exported** (Workspace natives) | Google Sheets | export → `text/csv` (⚠️ **first sheet only** — see [Limitations](#limitations)) |
+| **Downloaded + decoded** | `txt`, `text`, `md`, `markdown`, `csv`, `tsv`, `json`, `xml`, `yaml`, `yml`, `log`, `ini`, `conf`, `properties`, `css`, `js`, `ts`, plus any `text/*` MIME type | download → charset-aware decode |
+| **Downloaded + rendered** | `html`, `htm`, `xhtml` | download → decode → markup rendered to plain text |
+| **Downloaded + extracted** | `pdf` | download → Apache Tika (PDFBox) |
+| **Downloaded + extracted** | uploaded Microsoft Office: `docx`, `xlsx`, `pptx` (OOXML) and `doc`, `xls`, `ppt` (legacy OLE2) | download → Apache Tika (POI) |
+| **Unsupported (skipped/error)** | images, audio, video, archives, other Google Apps types (Forms, Drawings, Sites, …), unknown binary | — |
+| **Unsupported: Drive shortcuts** | `application/vnd.google-apps.shortcut` | Not followed. A shortcut pointing at a supported file yields **no** document. |
 
-An unsupported file found while **listing a folder** is skipped with a logged warning; the same file named **explicitly** in `fileIds` is an **error** (typo/intent detection).
+The Drive **MIME type is authoritative** throughout: it decides both whether a file can be loaded and which parser reads it. The file-name extension is only a fallback for files whose MIME type is missing or generic (`application/octet-stream`). This matters in practice, because renaming a file in the Drive web UI drops its extension.
+
+### Text decoding
+
+Downloaded text is decoded using, in priority order: a byte-order mark, the charset Drive declares in the response `Content-Type`, then UTF-8. Any BOM is stripped rather than being carried into the document body — a leading `U+FEFF` would otherwise corrupt the first CSV header cell or the first Markdown heading. Decoding is **strict**: once the charset is known, bytes that still do not decode surface as an error rather than as replacement characters.
 
 ### Text-less PDFs (scanned/image-only or blank)
 
-A scanned PDF is page *images* in a PDF container, and a blank PDF has no content at all — in both cases PDFBox (which extracts only the text layer) parses "successfully" with zero text. Instead of silently producing an **empty** document the loader detects it:
+A scanned PDF is page *images* in a PDF container, and a blank PDF has no content at all — in both cases PDFBox (which extracts only the text layer) parses "successfully" with zero text. Instead of silently producing an **empty** document the loader detects it and reports it.
 
-- named **explicitly** in `fileIds` → an `ai:Error`: *"Failed to extract text from '…': the PDF contains no extractable text content (it may be a scanned/image-only document or an empty one); OCR is not supported"*;
-- discovered in a **folder listing** → skipped with a logged warning (*"Skipping a PDF with no extractable text content"*, carrying the file name, file ID, and folder ID); the walk continues — one bad PDF never aborts a bulk load.
+## Partial failure
 
-One neutral message covers both cases: without OCR the loader cannot tell a scan from a genuinely blank document, and both are equally unusable as text. Exported Google Docs/Sheets/Slides never hit this path — export returns text directly and is not parsed by PDFBox.
+The two selection modes differ deliberately:
+
+- A file **discovered in a folder listing** that cannot be loaded — for any reason: a text-less PDF, content that will not decode, an export above Drive's size cap, a file flagged as abusive, a permissions error on that one file — is **skipped with a logged warning, and the walk continues**. One unreadable file never discards the documents already collected, nor abandons the rest of the folder. When anything was skipped, a per-folder summary records how many loaded and how many did not.
+- A file **named explicitly** in `fileIds`/`fileUrls` that cannot be loaded is an **`ai:Error`**. Naming a file expresses intent, so failing to load it is a mistake worth reporting rather than a silent skip.
+
+The same asymmetry applies to unsupported types and trashed files.
 
 ## Authentication
 
-The loader consumes the connector's `drive:ConnectionConfig`, whose `auth` is either an OAuth2 refresh-token grant or a bearer token. To set up an OAuth2 refresh-token grant against Drive:
+`drive:ConnectionConfig.auth` accepts the two shapes the connector supports:
+
+| Auth | Use |
+| --- | --- |
+| `http:BearerTokenConfig` | A token you already hold. Constructs without contacting a token endpoint. |
+| `http:OAuth2RefreshTokenGrantConfig` | Interactive/user-delegated access. |
+
+> **No service-account auth.** The connector's `auth` field admits only those two, so a JWT
+> bearer grant (`http:OAuth2JwtBearerGrantConfig`) — the usual shape for a service account with
+> domain-wide delegation, and the natural fit for unattended ingestion — cannot be configured.
+> Unattended loads need a long-lived refresh token instead.
+
+### Required scopes
+
+`https://www.googleapis.com/auth/drive.readonly` is the minimum, and is sufficient for everything this loader does (list, get metadata, download, export).
+
+> ⚠️ **`drive.file` is NOT sufficient.** That scope only grants access to files your own app created or the user explicitly opened with it, so a loader pointed at pre-existing Drive content will see nothing.
+
+### Setting up an OAuth2 refresh-token grant
 
 1. In the [Google Cloud Console](https://console.cloud.google.com/), create (or pick) a project and **enable the Google Drive API** (APIs & Services → Library → *Google Drive API* → Enable).
 2. Configure the **OAuth consent screen** (User type *External* is fine for testing; add your Google account as a *Test user*).
 3. Create an **OAuth client ID** credential of type *Desktop app* (or *Web application*). Note the **client ID** and **client secret**.
-4. Grant the read-only Drive scope `https://www.googleapis.com/auth/drive.readonly` and obtain a **refresh token** — e.g. via the [OAuth 2.0 Playground](https://developers.google.com/oauthplayground/) (gear icon → *Use your own OAuth credentials* → paste client ID/secret → authorize the *Drive API v3* `drive.readonly` scope → *Exchange authorization code for tokens*).
+4. Grant the `https://www.googleapis.com/auth/drive.readonly` scope and obtain a **refresh token** — e.g. via the [OAuth 2.0 Playground](https://developers.google.com/oauthplayground/) (gear icon → *Use your own OAuth credentials* → paste client ID/secret → authorize the *Drive API v3* `drive.readonly` scope → *Exchange authorization code for tokens*).
+
+## Quickstart
 
 ```ballerina
 import ballerina/ai;
+import ballerina/io;
 import ballerinax/ai.google.drive;
-import ballerinax/googleapis.drive as gdrive;
 
 configurable string clientId = ?;
 configurable string clientSecret = ?;
 configurable string refreshToken = ?;
 
 public function main() returns error? {
-    gdrive:ConnectionConfig connectionConfig = {
+    drive:ConnectionConfig connectionConfig = {
         auth: {
             clientId,
             clientSecret,
@@ -103,57 +133,105 @@ public function main() returns error? {
 
     ai:Document[]|ai:Document result = check loader.load();
     ai:Document[] documents = result is ai:Document[] ? result : [result];
-    // Feed `documents` into a chunker / vector store …
+    io:println(string `Loaded ${documents.length()} document(s)`);
 }
 ```
 
-## Reusing an existing client
+### Reusing a client you already hold
 
-`init` accepts **either** a `drive:ConnectionConfig` (shown above, where the loader builds and owns its client) **or** an already-constructed `drive:Client`. Pass a client when your application already talks to Drive — the loader then reuses that connection instead of creating a second HTTP connection pool and a second OAuth token-refresh cycle:
+If your program already talks to Drive through the connector, pass that client instead of a
+config. The loader then adds no second HTTP connection pool and no second OAuth refresh cycle:
 
 ```ballerina
-import ballerina/ai;
-import ballerinax/ai.google.drive;
-import ballerinax/googleapis.drive as gdrive;
+drive:Client existingClient = check new (connectionConfig);
+// … your own Drive calls …
 
-// A client your application already created and uses elsewhere.
-gdrive:Client driveClient = check new ({
-    auth: {clientId, clientSecret, refreshToken, refreshUrl: "https://oauth2.googleapis.com/token"}
-});
-
-// Hand it to the loader instead of a config.
-drive:TextDataLoader loader = check new (driveClient, [
-    {folderId: "1AbCdEfGhIjKlMnOpQrStUvWxYz", recursive: true}
+drive:TextDataLoader loader = check new (existingClient, [
+    {folderId: "1SpecsFolderId", recursive: true}
 ]);
-
-ai:Document[]|ai:Document result = check loader.load();
 ```
 
-> **Ownership:** a caller-supplied client is **not owned** by the loader — it is never closed or reconfigured, and its lifecycle stays yours. For an OAuth2 client, token acquisition and refresh also remain your responsibility; the loader only issues requests through the client it is given. (When you pass a `ConnectionConfig` instead, the loader owns the client it constructs.)
+A supplied client is **not owned** by the loader: it is never closed or reconfigured, and token
+acquisition and refresh stay your concern. Note that the retry and response-limit defaults
+described under [Configuration](#configuration) are applied only when the loader builds the
+client itself — a client you construct carries whatever you configured on it.
+
+### Feeding a knowledge base
+
+`ai:KnowledgeBase.ingest` accepts `ai:Document[]|ai:Document` directly, and `load()` returns
+exactly that, so the hand-off is one line. The fragment below assumes a `vectorStore` and an
+`embeddingModel` — those come from provider packages (a vector-store connector and an embedding
+provider), not from `ballerina/ai` itself, so substitute the ones you use:
+
+```ballerina
+drive:TextDataLoader loader = check new (connectionConfig, [
+    {folderId: "1SpecsFolderId", recursive: true}
+]);
+
+// `AUTO` lets the knowledge base pick a chunker per document type — Markdown loaded from Drive
+// gets `ai:MarkdownChunker`, rendered HTML gets `ai:HtmlChunker`, and so on. Pass an explicit
+// `ai:Chunker` instead if you want to control chunking yourself.
+ai:KnowledgeBase knowledgeBase = new ai:VectorKnowledgeBase(vectorStore, embeddingModel);
+check knowledgeBase.ingest(check loader.load());
+
+ai:QueryMatch[] matches = check knowledgeBase.retrieve("What is the Q3 revenue target?", 5);
+```
+
+## Configuration
+
+Configuration is the connector's `drive:ConnectionConfig`. Two of its fields are optional and
+unset by default, which would leave a bulk load with no retry at all over Drive's throttling and
+an unbounded response body; the loader fills both in when you supply neither. An explicit value
+always wins — including one that deliberately disables retrying.
+
+| Field | Applied default | Purpose |
+| --- | --- | --- |
+| `retryConfig` | 4 attempts, 1s interval, ×2 backoff, capped at 20s, over `[403, 429, 500, 502, 503, 504]` | Google [requires exponential backoff](https://developers.google.com/workspace/drive/api/guides/handle-errors) for rate limiting. Drive reports throttling as **403** `rateLimitExceeded` as well as 429, and `http:RetryConfig` can only match on status code — so a genuine permissions 403 is also retried before it fails. |
+| `responseLimits` | `maxEntityBodySize` 100 MiB | Bounds a download. Unset, this defaults to unlimited. |
+
+The remaining fields (`timeout`, `httpVersion`, `poolConfig`, `secureSocket`, `proxy`, …) are the
+connector's own and are passed through untouched. Your `drive:ConnectionConfig` record is never
+mutated — the defaults are applied to a clone.
 
 ## Metadata
 
-Each document's `ai:Metadata` is populated from the Drive file metadata: `fileName`, `mimeType` (the **original** Drive MIME type, even for exported Workspace files), `fileSize` (when Drive reports it — binary files and Google Docs; often absent for other Workspace files), `createdAt`, and `modifiedAt` (parsed from Drive's RFC 3339 timestamps). The opaque Drive `fileId` is retained as an extra metadata field.
+Each document's `ai:Metadata` is populated from the Drive file metadata:
 
-## Limitations & open items
+| Field | Source |
+| --- | --- |
+| `fileName` | Drive `name` |
+| `mimeType` | The **original** Drive MIME type, even for exported Workspace files |
+| `fileSize` | The downloaded byte count for a binary download. **Unset for exported Workspace files** — an export's length is not the source file's size. Drive's own `size` field is not used; see [Limitations](#limitations). |
+| `createdAt`, `modifiedAt` | Parsed from Drive's RFC 3339 timestamps |
+| `fileId` | The opaque Drive ID, retained as an extra field so a document can be traced back to its source |
+| `webUrl` | Drive's `webViewLink` — a citation URL back to the document |
 
-- **Google Sheets export is first-sheet only** (`text/csv`); additional sheets are not included.
-- **Export size limit:** Google caps a single export at 10 MB.
-- **Google Drawings/Forms/Sites** and other non-Docs/Sheets/Slides Workspace types have no supported textual export and are skipped.
-- **No OCR.** Text-less PDFs (scanned/image-only or blank) are *detected* and reported (see
-  above), not read — the loader ships no OCR engine. Future options, in rough order of fit for a Drive loader:
-  **Google Drive's own OCR** (`files.copy` converting a PDF/image into a Google Doc with
-  `ocrLanguage`, then exporting that Doc as text — stays inside the Drive API and quota);
-  **Google Cloud Vision** (managed OCR; extra credentials/latency/pricing); or **Tesseract via
-  Tika's OCR module** (free/local, but requires the native `tesseract` binary on every host —
-  a deployment burden for a library).
-- **Embedded objects inside Office files** (thumbnails, OLE attachments) are intentionally not
-  recursed into — only the document's own text is extracted.
-- **Duplicates are not de-duplicated:** the same file named twice in `fileIds`, or named
-  explicitly *and* also reached through a loaded folder, yields one document per occurrence.
-  De-duplication (if wanted) is the caller's responsibility.
-- **One metadata call per loaded file:** because the connector's listing (`getAllFiles`)
-  returns only `id`/`name`/`mimeType`, the loader issues a `getFile` per supported file to
-  populate `fileSize`/`createdAt`/`modifiedAt`. Loading a very large folder therefore makes
-  roughly one extra request per file — a rate-limit consideration, not a correctness issue.
-- **Shared drives:** the underlying connector calls pass `supportsAllDrives`/`includeItemsFromAllDrives`, so files in shared drives are reachable by ID and shared-drive folders can be listed. Enumerating an entire shared drive by its *drive ID* (rather than a folder ID within it) is not a distinct feature of this loader and is not covered by the integration suite.
+## Limitations
+
+- ⚠️ **Google Sheets lose every sheet but the first.** Sheets are exported as `text/csv`, which Google documents as [first-sheet-only](https://developers.google.com/workspace/drive/api/guides/ref-export-formats). A multi-tab spreadsheet is loaded with tabs 2..N **silently discarded** — no warning, no error. If your corpus contains multi-tab spreadsheets, this is data loss you need to know about.
+- **Drive shortcuts are not followed.** A folder containing only shortcuts loads zero documents. `shortcutDetails.targetId` is not requested or resolved.
+- **Export size limit:** Google caps a single export at 10 MB. This applies only to Workspace natives (Docs/Sheets/Slides). An export that exceeds it is reported by name rather than as raw Drive JSON.
+- **No OCR.** Text-less PDFs (scanned/image-only or blank) are *detected* and reported, not read — the loader ships no OCR engine.
+- **GraalVM native image is not supported yet.** `graalvmCompatible` is `false`: the Apache POI / XMLBeans / Tika stack is reflection- and resource-driven, and the native-image metadata for it has not been generated and verified.
+- **No de-duplication.** The same file named twice in `fileIds`, or named explicitly *and* also reached through a loaded folder, yields one document per occurrence.
+- **No cycle or depth guard on recursion.** Drive has been single-parent since 2020, so a folder cycle is not constructible today, but there is no `maxDepth` limit.
+- **Embedded objects inside Office files** (thumbnails, OLE attachments) are intentionally not recursed into — only the document's own text is extracted.
+- **Encrypted or password-protected documents** are not decrypted.
+- **Shared drives:** the connector passes `supportsAllDrives`/`includeItemsFromAllDrives` on the calls the loader makes, so files in shared drives are reachable by ID and shared-drive folders can be listed. Enumerating an entire shared drive by its *drive ID* (rather than a folder ID within it) is not a feature of this loader.
+
+### Inherited from the `googleapis.drive` connector
+
+These follow from building on the connector rather than on the Drive REST API directly:
+
+- **No size ceiling before download.** Drive serialises `size` as a JSON string (it is an int64) but the connector types `File.size` as `int`, so requesting the field breaks the connector's response binding. The field therefore cannot be requested at all, and a file's size is only known once it has been downloaded. `ai:Metadata.fileSize` is derived from the downloaded byte count instead. Memory is bounded by `responseLimits.maxEntityBodySize`, not by a per-file check.
+- **One extra request per file.** `getAllFiles` accepts no field mask, so a listing returns only Drive's default projection (id/name/mimeType/kind). The timestamps `ai:Metadata` needs cost one `files.get` per file that becomes a document — an N+1 that cannot be avoided through the connector.
+- **`incompleteSearch` is not surfaced.** When Drive cannot search every corpus it flags the listing as partial. The connector's listing stream drops that flag, so a partial ingestion is indistinguishable from a complete one.
+- **No `acknowledgeAbuse`.** A file Drive has flagged as abusive cannot be downloaded through the connector at all. The refusal is reported by name, but there is no way to override it.
+- **Coarser errors.** The connector rebuilds every Drive failure as `error(<response body>)`, discarding the HTTP status code and the original error as a cause. A missing file is therefore recognised by matching Drive's `notFound` reason in the message rather than by status code.
+- **No `serviceUrl`.** The connector hardcodes `https://www.googleapis.com` as a module-private constant, so the loader cannot be pointed at a mock service. Traversal, routing, and partial-failure behaviour are consequently **not covered by automated tests** — only the pure logic around them is (classification, URL parsing, decoding, extraction, metadata mapping, error translation). See the test-coverage note below.
+
+### Test coverage
+
+The unit-testable layers are well covered, but the code that walks Drive is not: with no way to
+redirect the connector at a test server, `load()` cannot be exercised without live credentials.
+`drive_data_loader.bal` sits at roughly 20% line coverage as a result.

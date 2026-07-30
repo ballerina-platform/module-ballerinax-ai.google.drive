@@ -10,7 +10,24 @@ keywords = ["Vendor/Google", "Area/AI & Machine Learning", "Type/Data Loader", "
 repository = "https://github.com/ballerina-platform/module-ballerinax-ai.google.drive"
 
 [platform.java21]
-graalvmCompatible = true
+# Set to `false` until GraalVM native-image metadata for the text-extraction stack exists.
+#
+# Declaring `true` promises that `bal build --graalvm` yields a working binary. It does not:
+# Apache POI, XMLBeans and log4j-core are heavily reflection- and resource-driven (POI's
+# poi-ooxml-lite schema types are resolved reflectively, XMLBeans loads `.xsb` resources from
+# the jar, Tika discovers parsers through META-INF/services), and none of that survives native
+# compilation without reflect-config.json / resource-config.json / jni-config.json. Office
+# extraction would fail at runtime with ClassNotFoundException or SchemaTypeLoaderException.
+#
+# To flip this back to `true`:
+#   1. Run the test suite on a GraalVM JDK with the tracing agent attached, e.g.
+#      JAVA_TOOL_OPTIONS="-agentlib:native-image-agent=config-output-dir=<dir>" bal test
+#   2. Commit the generated configs under
+#      native/src/main/resources/META-INF/native-image/io.ballerina.lib/ai.google.drive-native/
+#   3. Verify with `bal build --graalvm` that Office AND PDF extraction both still work.
+# Generated metadata is the only kind worth committing — hand-written guesses at POI's
+# reflective surface would restore the same unsupportable promise this change removes.
+graalvmCompatible = false
 
 # Native text extractor (Apache Tika) for this package.
 [[platform.java21.dependency]]
@@ -121,3 +138,21 @@ version = "2.25.4"
 groupId = "org.apache.logging.log4j"
 artifactId = "log4j-core"
 version = "2.25.4"
+
+# POI's optional-but-reachable dependencies. Without these an encrypted or digitally signed
+# OOXML file (commons-codec, for the HMAC/digest work) or a document containing charts or
+# geometry (curvesapi, commons-math3) raises NoClassDefFoundError inside Tika.
+[[platform.java21.dependency]]
+groupId = "commons-codec"
+artifactId = "commons-codec"
+version = "1.18.0"
+
+[[platform.java21.dependency]]
+groupId = "com.github.virtuald"
+artifactId = "curvesapi"
+version = "1.08"
+
+[[platform.java21.dependency]]
+groupId = "org.apache.commons"
+artifactId = "commons-math3"
+version = "3.6.1"

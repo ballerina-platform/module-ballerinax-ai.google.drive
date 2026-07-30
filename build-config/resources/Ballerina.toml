@@ -10,7 +10,11 @@ keywords = ["Vendor/Google", "Area/AI & Machine Learning", "Type/Data Loader", "
 repository = "https://github.com/ballerina-platform/module-ballerinax-ai.google.drive"
 
 [platform.java21]
-graalvmCompatible = true
+# Kept in sync with ballerina/Ballerina.toml — see the full explanation there. `false` until
+# GraalVM native-image metadata for the POI/XMLBeans/Tika stack is generated and verified.
+# This template is what `updateTomlFiles` regenerates from at release time, so changing only
+# the generated file would silently restore `true` on the next release.
+graalvmCompatible = false
 
 # Native text extractor (Apache Tika) for this package.
 [[platform.java21.dependency]]
@@ -121,3 +125,21 @@ version = "@log4jVersion@"
 groupId = "org.apache.logging.log4j"
 artifactId = "log4j-core"
 version = "@log4jVersion@"
+
+# POI's optional-but-reachable dependencies. Without these an encrypted or digitally signed
+# OOXML file (commons-codec, for the HMAC/digest work) or a document containing charts or
+# geometry (curvesapi, commons-math3) raises NoClassDefFoundError inside Tika.
+[[platform.java21.dependency]]
+groupId = "commons-codec"
+artifactId = "commons-codec"
+version = "@commonsCodecVersion@"
+
+[[platform.java21.dependency]]
+groupId = "com.github.virtuald"
+artifactId = "curvesapi"
+version = "@curvesapiVersion@"
+
+[[platform.java21.dependency]]
+groupId = "org.apache.commons"
+artifactId = "commons-math3"
+version = "@commonsMath3Version@"

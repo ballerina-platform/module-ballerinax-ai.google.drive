@@ -1,0 +1,18 @@
+# The Gradle wrapper script must keep LF endings. A Windows checkout with core.autocrlf=true
+# would otherwise rewrite it with CRLF, which makes it unexecutable on the Linux CI runners of
+# anyone who round-trips the repository through Windows.
+/gradlew text eol=lf
+*.bat text eol=crlf
+
+# Test fixtures whose exact bytes matter. These are parsed by Apache Tika/POI and PDFBox, so any
+# line-ending translation silently corrupts them — and the resulting test failure points at the
+# extractor rather than at the checkout.
+*.jar binary
+*.pdf binary
+*.png binary
+*.doc binary
+*.docx binary
+*.xls binary
+*.xlsx binary
+*.ppt binary
+*.pptx binary

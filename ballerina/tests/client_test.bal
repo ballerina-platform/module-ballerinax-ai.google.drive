@@ -106,3 +106,170 @@ isolated function testIsNotFoundErrorRejectsOtherErrors() {
     test:assertFalse(isNotFoundError(error("Invalid credentials (401)")), "a 401 is not a not-found");
     test:assertFalse(isNotFoundError(error("some unrelated failure")), "a generic error is not a not-found");
 }
+
+// ---- isNotFoundError: the typed status code is authoritative ------------------
+// The connector stringifies every Drive failure, so no status code reaches this function
+// today. These cover the branch that runs whenever one does.
+
+@test:Config {}
+isolated function testIsNotFoundErrorUsesTypedStatusCode() {
+    http:ClientRequestError notFound =
+        error("Not Found", statusCode = 404, headers = {}, body = ());
+    test:assertTrue(isNotFoundError(notFound), "a typed 404 is a not-found");
+}
+
+@test:Config {}
+isolated function testIsNotFoundErrorTypedStatusWinsOverMessage() {
+    // The message says "not found", but the status says 403. The status is authoritative:
+    // treating this as a missing file would hide a permissions problem.
+    http:ClientRequestError forbidden =
+        error("The requested resource was not found", statusCode = 403, headers = {}, body = ());
+    test:assertFalse(isNotFoundError(forbidden), "a typed 403 is not a not-found");
+}
+
+@test:Config {}
+isolated function testIsNotFoundErrorFindsStatusThroughCauseChain() {
+    http:ClientRequestError cause =
+        error("Not Found", statusCode = 404, headers = {}, body = ());
+    test:assertTrue(isNotFoundError(error("Failed to retrieve the file", cause)),
+            "a wrapped 404 is still recognised");
+}
+
+// ---- REGRESSION: a bare "404" substring must NOT be treated as a not-found -----
+// `message.includes("404")` matched any message that merely contained those digits,
+// producing a "file not found" diagnostic for errors that were nothing of the sort.
+
+@test:Config {}
+isolated function testIsNotFoundErrorIgnoresIncidental404InUrl() {
+    test:assertFalse(
+            isNotFoundError(error("Quota exceeded; see https://developers.google.com/drive/errors#404")),
+            "a help-URL fragment ending in 404 is not a not-found");
+}
+
+@test:Config {}
+isolated function testIsNotFoundErrorIgnores404InFileName() {
+    test:assertFalse(isNotFoundError(error("Failed to download file 'Report-404.pdf'")),
+            "a file name containing 404 is not a not-found");
+}
+
+// ---- describeContentFailure ---------------------------------------------------
+// The connector returns a content failure as `error(<raw response body>)`, so Drive's reason
+// string is the only signal left to match on.
+
+@test:Config {}
+isolated function testDescribeContentFailureNamesTheExportSizeLimit() {
+    error err = error("{\"error\":{\"errors\":[{\"reason\":\"exportSizeLimitExceeded\"}],\"code\":403}}");
+    string? described = describeContentFailure(err, "Huge Doc", "1Huge");
+    if described is string {
+        test:assertTrue(described.includes("10 MB"), described);
+        test:assertTrue(described.includes("Huge Doc"), described);
+    } else {
+        test:assertFail("An export over Drive's 10 MB cap must be named explicitly");
+    }
+}
+
+@test:Config {}
+isolated function testDescribeContentFailureNamesAbusiveFileRefusal() {
+    error err = error("{\"error\":{\"errors\":[{\"reason\":\"cannotDownloadAbusiveFile\"}]}}");
+    string? described = describeContentFailure(err, "suspect.zip", "1Abuse");
+    if described is string {
+        test:assertTrue(described.includes("abusive"), described);
+    } else {
+        test:assertFail("Drive's abusive-file refusal must be named explicitly");
+    }
+}
+
+@test:Config {}
+isolated function testDescribeContentFailureLeavesOtherErrorsAlone() {
+    test:assertTrue(describeContentFailure(error("some other failure"), "a.txt", "1A") is (),
+            "an unrecognised failure is reported as the connector phrased it");
+}
+
+// ---- init: source validation happens up front ---------------------------------
+// REGRESSION: `folderId`/`folderUrl` ambiguity and URL parsing used to be deferred to load(),
+// so a misconfigured source only failed after some documents had been fetched and discarded.
+
+@test:Config {}
+isolated function testInitRejectsAmbiguousFolderSelector() {
+    drive:ConnectionConfig config = {auth: {token: "ya29.test-access-token"}};
+    TextDataLoader|error loader = new (config, [{
+        folderId: "1FolderId",
+        folderUrl: "https://drive.google.com/drive/folders/1Other"
+    }]);
+    if loader is error {
+        test:assertTrue(loader.message().includes("at most one"), loader.message());
+    } else {
+        test:assertFail("Setting both folderId and folderUrl must fail at init, not at load time");
+    }
+}
+
+@test:Config {}
+isolated function testInitRejectsUnparseableFolderUrl() {
+    drive:ConnectionConfig config = {auth: {token: "ya29.test-access-token"}};
+    TextDataLoader|error loader =
+        new (config, [{folderUrl: "https://drive.google.com/drive/my-drive"}]);
+    test:assertTrue(loader is error, "a URL with no extractable ID must fail at init");
+}
+
+@test:Config {}
+isolated function testInitResolvesFolderUrlUpFront() returns error? {
+    drive:ConnectionConfig config = {auth: {token: "ya29.test-access-token"}};
+    TextDataLoader _ = check new (config,
+            [{folderUrl: "https://drive.google.com/drive/folders/1Fff?usp=drive_link"}]);
+}
+
+@test:Config {}
+isolated function testInitAcceptsSourceThatSelectsNothing() returns error? {
+    // Legal but pointless: it warns rather than failing, since an empty selection is not
+    // ambiguous the way a contradictory one is.
+    drive:ConnectionConfig config = {auth: {token: "ya29.test-access-token"}};
+    TextDataLoader _ = check new (config, [{}]);
+}
+
+// ---- childrenQuery -----------------------------------------------------------
+
+@test:Config {}
+isolated function testChildrenQueryExcludesTrashed() {
+    test:assertEquals(childrenQuery("1Folder"), "'1Folder' in parents and trashed = false");
+}
+
+@test:Config {}
+isolated function testChildrenQueryEscapesQuotes() {
+    // A quote in the ID would close the single-quoted literal early and malform the query.
+    test:assertEquals(childrenQuery("a'b"), "'a\\'b' in parents and trashed = false");
+}
+
+// ---- newDriveClient: retry/response-limit defaults -----------------------------
+// The connector leaves both unset, which means no retry over Drive's 403/429 throttling and an
+// unbounded response body. The loader fills them in — without touching the caller's record.
+
+@test:Config {}
+isolated function testNewDriveClientLeavesCallerConfigUnmutated() returns error? {
+    drive:ConnectionConfig config = {auth: {token: "ya29.test-access-token"}};
+    drive:Client _ = check newDriveClient(config);
+    test:assertTrue(config.retryConfig is (), "the caller's retryConfig is left as they set it");
+    test:assertTrue(config.responseLimits is (), "the caller's responseLimits is left as they set it");
+}
+
+@test:Config {}
+isolated function testRetryDefaultsCoverDriveThrottling() {
+    test:assertEquals(DEFAULT_RETRY_CONFIG.count, 4, "a retry policy is configured by default");
+    test:assertTrue(DEFAULT_RETRY_CONFIG.statusCodes.indexOf(429) !is (), "429 is retried");
+    test:assertTrue(DEFAULT_RETRY_CONFIG.statusCodes.indexOf(403) !is (),
+            "403 throttling is retried — Drive reports rateLimitExceeded as a 403");
+    test:assertEquals(DEFAULT_RESPONSE_LIMITS.maxEntityBodySize, 104857600,
+            "the entity body is bounded, not unlimited");
+}
+
+@test:Config {}
+isolated function testExplicitRetryConfigIsNotOverridden() returns error? {
+    // A caller who deliberately disables retrying must keep that, not silently get the default.
+    drive:ConnectionConfig config = {auth: {token: "ya29.test-access-token"}, retryConfig: {count: 0}};
+    drive:Client _ = check newDriveClient(config);
+    http:RetryConfig? retryConfig = config.retryConfig;
+    if retryConfig is http:RetryConfig {
+        test:assertEquals(retryConfig.count, 0, "an explicit retryConfig survives");
+    } else {
+        test:assertFail("The explicitly supplied retryConfig was discarded");
+    }
+}

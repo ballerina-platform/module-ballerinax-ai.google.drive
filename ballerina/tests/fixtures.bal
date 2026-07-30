@@ -49,6 +49,9 @@ final readonly & byte[] XLSX_BYTES = loadResource("office-report.xlsx");
 final readonly & byte[] PPTX_BYTES = loadResource("office-report.pptx");
 final readonly & byte[] XLS_BYTES = loadResource("office-legacy.xls");
 final readonly & byte[] PPT_BYTES = loadResource("office-legacy.ppt");
+// Legacy Word (OLE2). POI reads this through HWPF, a distinct code path from HSSF (.xls) and
+// HSLF (.ppt), so it needs its own fixture even though `.doc` was already advertised.
+final readonly & byte[] DOC_BYTES = loadResource("office-legacy.doc");
 
 // The marker text Tika extracts from each Office fixture above.
 const string DOCX_TEXT = "OFFICE_FIXTURE_OK";
@@ -56,6 +59,17 @@ const string XLSX_TEXT = "OFFICE_MARKER_XLSX";
 const string PPTX_TEXT = "OFFICE_MARKER_PPTX";
 const string XLS_TEXT = "OFFICE_MARKER_XLS";
 const string PPT_TEXT = "OFFICE_MARKER_PPT";
+const string DOC_TEXT = "OFFICE_MARKER_DOC";
+
+// The Drive MIME type reported for each fixture format. The extractor selects its parser
+// from these (the file name is only a fallback), so tests pair every fixture with its type.
+const string MIME_PDF = "application/pdf";
+const string MIME_DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+const string MIME_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+const string MIME_PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+const string MIME_XLS = "application/vnd.ms-excel";
+const string MIME_PPT = "application/vnd.ms-powerpoint";
+const string MIME_DOC = "application/msword";
 
 isolated function loadResource(string name) returns readonly & byte[] {
     byte[]|io:Error bytes = io:fileReadBytes("tests/resources/" + name);
