@@ -191,7 +191,33 @@ always wins — including one that deliberately disables retrying.
 
 The remaining fields (`timeout`, `httpVersion`, `poolConfig`, `secureSocket`, `proxy`, …) are the
 connector's own and are passed through untouched. Your `drive:ConnectionConfig` record is never
-mutated — the defaults are applied to a clone.
+mutated — the defaults are applied to a copy.
+
+### Tuning retries for folders with inaccessible files
+
+Because a permissions 403 is indistinguishable from a throttling 403 at the status-code level, an
+inaccessible file costs the full retry ladder (~15s: 1 + 2 + 4 + 8) before it is skipped. That is
+paid per file, so a folder where many files are not shared with you loads slowly while still
+returning the same documents. If you hit that — and you are not loading enough at once to be
+throttled — supply a shorter ladder, or drop 403 from the retried statuses:
+
+```ballerina
+drive:ConnectionConfig config = {
+    auth: {...},
+    // Retry only unambiguous transient failures; fail an inaccessible file immediately.
+    retryConfig: {
+        interval: 1,
+        count: 4,
+        backOffFactor: 2.0,
+        maxWaitInterval: 20,
+        statusCodes: [429, 500, 502, 503, 504]
+    }
+};
+```
+
+The trade-off runs the other way too: without 403, a bulk load that *does* get rate-limited loses
+its retry over Drive's most common throttle signal. Keep the default unless slow folder loads are
+an observed problem.
 
 ## Metadata
 

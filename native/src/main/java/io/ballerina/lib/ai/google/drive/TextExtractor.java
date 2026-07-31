@@ -25,6 +25,7 @@ import io.ballerina.runtime.api.utils.StringUtils;
 import io.ballerina.runtime.api.values.BArray;
 import io.ballerina.runtime.api.values.BMap;
 import io.ballerina.runtime.api.values.BString;
+import org.apache.tika.exception.WriteLimitReachedException;
 import org.apache.tika.extractor.EmbeddedDocumentExtractor;
 import org.apache.tika.metadata.Metadata;
 import org.apache.tika.metadata.TikaCoreProperties;
@@ -76,8 +77,26 @@ import java.util.Locale;
  */
 public final class TextExtractor {
 
-    // A BodyContentHandler write limit of -1 means "no limit" on extracted content size.
-    private static final int UNLIMITED_CONTENT_SIZE = -1;
+    /**
+     * The largest document this extractor will parse, in bytes. Both the input array and the
+     * structures Tika builds from it are held in memory, and a highly-compressible OOXML file
+     * expands far beyond its download size, so an unbounded parse can exhaust the loader
+     * process heap and take down every concurrent load with it. Refusing an oversized document
+     * costs one file; an {@code OutOfMemoryError} costs the process.
+     *
+     * <p>Matches {@code DEFAULT_RESPONSE_LIMITS.maxEntityBodySize} in {@code client.bal}, which
+     * caps what the Drive client will read in the first place — this is the backstop for a
+     * caller who raised or disabled that limit.
+     */
+    private static final int MAX_DOCUMENT_SIZE_BYTES = 104857600;
+
+    /**
+     * The largest amount of text this extractor will accumulate, in characters (~20 MB of
+     * UTF-16). Passed as the {@link BodyContentHandler} write limit, which aborts the parse
+     * once exceeded rather than growing the buffer without bound — the decompression-bomb case,
+     * where a small input yields effectively unlimited output.
+     */
+    private static final int MAX_EXTRACTED_CHARACTERS = 10_000_000;
 
     // The MIME types Drive reports for the binary formats routed to this extractor. These
     // mirror EXTRACTABLE_MIME_TYPES in utils.bal, which is what admits a file to this lane.
@@ -116,6 +135,15 @@ public final class TextExtractor {
     private static final BString ERROR_DETAIL_REASON = StringUtils.fromString("reason");
     private static final BString TEXTLESS_PDF_REASON = StringUtils.fromString("TEXTLESS_PDF");
 
+    /**
+     * The error detail values identifying the two size refusals. Structured for the same reason
+     * as {@link #TEXTLESS_PDF_REASON}: a caller distinguishing "too big" from "unparseable"
+     * should not have to match on message text. Keep in sync with {@code utils.bal}.
+     */
+    private static final BString DOCUMENT_TOO_LARGE_REASON = StringUtils.fromString("DOCUMENT_TOO_LARGE");
+    private static final BString EXTRACTED_TEXT_TOO_LARGE_REASON =
+            StringUtils.fromString("EXTRACTED_TEXT_TOO_LARGE");
+
     private TextExtractor() {
     }
 
@@ -125,13 +153,21 @@ public final class TextExtractor {
      * @param content  the raw file bytes
      * @param fileName the file name, used as a Tika hint and as the parser fallback
      * @param mimeType the Drive MIME type, which selects the parser ({@code ""} when unknown)
-     * @return the extracted text as a {@link BString}, or a Ballerina error on failure
+     * @return the extracted text as a {@link BString}, or a Ballerina error on failure —
+     *         including when the document or its extracted text exceeds the size limits
      */
     public static Object extractText(BArray content, BString fileName, BString mimeType) {
         byte[] bytes = content.getBytes();
+        // Checked before parsing: past this point the parser's own structures are allocated on
+        // top of these bytes, so refusing early is the only bound that costs nothing.
+        if (bytes.length > MAX_DOCUMENT_SIZE_BYTES) {
+            return sizeLimitError(DOCUMENT_TOO_LARGE_REASON, String.format(
+                    "the document is %d bytes, which exceeds the %d byte extraction limit",
+                    bytes.length, MAX_DOCUMENT_SIZE_BYTES));
+        }
         try (InputStream stream = new ByteArrayInputStream(bytes)) {
             Parser parser = selectParser(fileName.getValue(), mimeType.getValue());
-            BodyContentHandler handler = new BodyContentHandler(UNLIMITED_CONTENT_SIZE);
+            BodyContentHandler handler = new BodyContentHandler(MAX_EXTRACTED_CHARACTERS);
             Metadata metadata = new Metadata();
             metadata.set(TikaCoreProperties.RESOURCE_NAME_KEY, fileName.getValue());
             ParseContext context = new ParseContext();
@@ -147,16 +183,21 @@ public final class TextExtractor {
             // genuinely blank document: PDFBox reads only the text layer, so surface a
             // descriptive error instead of silently returning an empty document.
             if (parser instanceof PDFParser && text.trim().isEmpty()) {
-                // Must be an explicitly typed `map<anydata>`: an untyped map makes the
-                // Ballerina `error.detail()` lang-lib call fail a runtime type check, and
-                // PredefinedTypes.TYPE_ERROR_DETAIL is readonly, so it cannot be populated.
-                BMap<BString, Object> detail = ValueCreator.createMapValue(
-                        TypeCreator.createMapType(PredefinedTypes.TYPE_ANYDATA));
-                detail.put(ERROR_DETAIL_REASON, TEXTLESS_PDF_REASON);
-                return ErrorCreator.createError(StringUtils.fromString(TEXTLESS_PDF_MESSAGE), detail);
+                return structuredError(TEXTLESS_PDF_REASON, TEXTLESS_PDF_MESSAGE);
             }
             return StringUtils.fromString(text);
         } catch (Exception | StackOverflowError | LinkageError e) {
+            // The handler raises WriteLimitReachedException once the parse has produced
+            // MAX_EXTRACTED_CHARACTERS, but the Office parsers wrap it (a SAXException surfaces
+            // as a TikaException), so the cause chain is what must be tested — hence Tika's own
+            // isWriteLimitReached rather than a catch clause. The partial text is deliberately
+            // discarded: silently returning a truncated document would be indexed downstream as
+            // if it were complete.
+            if (WriteLimitReachedException.isWriteLimitReached(e)) {
+                return sizeLimitError(EXTRACTED_TEXT_TOO_LARGE_REASON, String.format(
+                        "the extracted text exceeds the %d character limit",
+                        MAX_EXTRACTED_CHARACTERS));
+            }
             // Tika/PDFBox/POI throw StackOverflowError on deeply nested or malformed
             // documents, and LinkageError (NoClassDefFoundError) when an optional POI
             // dependency is absent — e.g. an encrypted OOXML file needing commons-codec.
@@ -167,6 +208,28 @@ public final class TextExtractor {
             return ErrorCreator.createError(StringUtils.fromString(
                     message != null ? message : e.getClass().getSimpleName()));
         }
+    }
+
+    /**
+     * Builds the error for a refused size, prefixing the limit description so the message reads
+     * as a complete sentence once the Ballerina layer wraps it with the file name.
+     */
+    private static Object sizeLimitError(BString reason, String detail) {
+        return structuredError(reason, "the file was not extracted because " + detail);
+    }
+
+    /**
+     * Creates a Ballerina error carrying a {@code reason} detail field, which is how the loader
+     * classifies extraction failures without matching on message text.
+     */
+    private static Object structuredError(BString reason, String message) {
+        // Must be an explicitly typed `map<anydata>`: an untyped map makes the Ballerina
+        // `error.detail()` lang-lib call fail a runtime type check, and
+        // PredefinedTypes.TYPE_ERROR_DETAIL is readonly, so it cannot be populated.
+        BMap<BString, Object> detail = ValueCreator.createMapValue(
+                TypeCreator.createMapType(PredefinedTypes.TYPE_ANYDATA));
+        detail.put(ERROR_DETAIL_REASON, reason);
+        return ErrorCreator.createError(StringUtils.fromString(message), detail);
     }
 
     /**

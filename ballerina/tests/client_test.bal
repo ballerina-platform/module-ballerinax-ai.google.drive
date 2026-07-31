@@ -239,6 +239,19 @@ isolated function testChildrenQueryEscapesQuotes() {
     test:assertEquals(childrenQuery("a'b"), "'a\\'b' in parents and trashed = false");
 }
 
+@test:Config {}
+isolated function testChildrenQueryEscapesBackslashes() {
+    // Drive escapes `\` as well as `'`; leaving it raw lets an ID smuggle in its own escape.
+    test:assertEquals(childrenQuery("a\\b"), "'a\\\\b' in parents and trashed = false");
+}
+
+@test:Config {}
+isolated function testChildrenQueryEscapesTrailingBackslash() {
+    // The regression the ordering guards: escaping quotes first would emit `'a\'`, whose closing
+    // quote is itself escaped, so the literal never terminates.
+    test:assertEquals(childrenQuery("a\\"), "'a\\\\' in parents and trashed = false");
+}
+
 // ---- newDriveClient: retry/response-limit defaults -----------------------------
 // The connector leaves both unset, which means no retry over Drive's 403/429 throttling and an
 // unbounded response body. The loader fills them in — without touching the caller's record.

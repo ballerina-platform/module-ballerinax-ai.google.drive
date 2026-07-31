@@ -355,11 +355,14 @@ public isolated class TextDataLoader {
 // Builds the Drive `q` filter selecting a folder's untrashed children.
 //
 // The ID is interpolated into a single-quoted literal, so an embedded `'` would close the
-// literal early and produce a malformed query. Drive's search syntax escapes it with a
-// backslash (https://developers.google.com/workspace/drive/api/guides/search-files). Real
-// Drive IDs are opaque base64url and contain no quotes, but an ID can come from caller input.
+// literal early and produce a malformed query. Drive's search syntax escapes both `'` and `\`
+// with a backslash (https://developers.google.com/workspace/drive/api/guides/search-files).
+// Real Drive IDs are opaque base64url and contain neither, but an ID can come from caller input.
 isolated function childrenQuery(string folderId) returns string {
-    string escaped = re `'`.replaceAll(folderId, "\\'");
+    // Backslashes first: escaping quotes first would then double-escape the backslashes this
+    // step introduces, and an ID ending in `\` would leave the closing quote escaped.
+    string escaped = re `\\`.replaceAll(folderId, "\\\\");
+    escaped = re `'`.replaceAll(escaped, "\\'");
     return string `'${escaped}' in parents and trashed = false`;
 }
 

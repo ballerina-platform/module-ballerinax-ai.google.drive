@@ -47,8 +47,8 @@ This repository only contains the source code for the package.
    `packagePAT` environment variables.
 
     ```bash
-    export packageUser=<Your GitHub Username>
-    export packagePAT=<GitHub Personal Access Token>
+    export packageUser="your-github-username"
+    export packagePAT="your-github-personal-access-token"
     ```
 
 ### Build options
@@ -76,7 +76,7 @@ Execute the commands below to build from the source.
 4. To run tests against different environments:
 
     ```bash
-    ./gradlew clean test -Pgroups=<Comma separated groups/test cases>
+    ./gradlew clean test "-Pgroups=unit,integration"
     ```
 
 5. To debug the package with a remote debugger:

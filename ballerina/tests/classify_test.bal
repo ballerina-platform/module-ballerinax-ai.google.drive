@@ -101,6 +101,29 @@ isolated function testGoogleNativesNeverReachThePoiLane() {
 }
 
 @test:Config {}
+isolated function testRecognisedMimeWinsOverExtension() {
+    // Drive lets a file be renamed without touching its MIME type, so a recognised MIME type
+    // must settle the class before the extension is ever consulted. Consulting the extension
+    // first would UTF-8 decode these binaries and yield mojibake instead of extracted text.
+    test:assertEquals(classify("application/pdf", "notes.txt"), EXTRACT_DOWNLOAD,
+        "A PDF renamed to .txt must still be Tika-extracted");
+    test:assertEquals(classify("application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "readme.md"), EXTRACT_DOWNLOAD, "A .docx renamed to .md must still be Tika-extracted");
+    // The converse: a text MIME type is not dragged into the Tika lane by an Office-looking name.
+    test:assertEquals(classify("text/plain", "report.docx"), TEXT_DOWNLOAD,
+        "A text/plain file renamed to .docx must still be decoded");
+}
+
+@test:Config {}
+isolated function testExtensionFallbackAppliesOnlyToUnknownMime() {
+    // A missing or generic MIME type is exactly when the extension is worth trusting.
+    test:assertEquals(classify((), "report.pdf"), EXTRACT_DOWNLOAD);
+    test:assertEquals(classify("application/octet-stream", "report.pdf"), EXTRACT_DOWNLOAD,
+        "A generic MIME type falls through to the extension");
+    test:assertEquals(classify("application/octet-stream", "notes.txt"), TEXT_DOWNLOAD);
+}
+
+@test:Config {}
 isolated function testClassifyUnsupportedBinary() {
     test:assertEquals(classify("image/png", "photo.png"), UNSUPPORTED);
     test:assertEquals(classify("audio/mpeg", "clip.mp3"), UNSUPPORTED);

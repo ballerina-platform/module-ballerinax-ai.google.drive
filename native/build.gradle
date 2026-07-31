@@ -17,6 +17,7 @@
 
 plugins {
     id 'java'
+    id 'checkstyle'
 }
 
 description = 'Google Drive document data loader - Java native utils'
@@ -37,4 +38,22 @@ dependencies {
 java {
     sourceCompatibility = JavaVersion.VERSION_21
     targetCompatibility = JavaVersion.VERSION_21
+}
+
+// The WSO2 checkstyle rules are downloaded by the `:checkstyle` project rather than committed,
+// so they do not exist until `:checkstyle:downloadCheckstyleRuleFiles` has run — which the task
+// dependency below guarantees before any Checkstyle task reads these paths.
+checkstyle {
+    toolVersion = "${project.checkstylePluginVersion}"
+    configFile = rootProject.file("build-config/checkstyle/build/checkstyle.xml")
+    configProperties = [
+            'suppressionFile': rootProject.file("build-config/checkstyle/build/suppressions.xml")
+    ]
+}
+
+// Only the production sources are linted; the WSO2 ruleset is written for them.
+checkstyleTest.enabled = false
+
+tasks.withType(Checkstyle).configureEach {
+    dependsOn(':checkstyle:downloadCheckstyleRuleFiles')
 }

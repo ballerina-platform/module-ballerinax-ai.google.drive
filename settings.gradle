@@ -7,6 +7,7 @@
 
 pluginManagement {
     plugins {
+        id "de.undercouch.download" version "${downloadPluginVersion}"
         id "net.researchgate.release" version "${releasePluginVersion}"
         id "io.ballerina.plugin" version "${ballerinaGradlePluginVersion}"
     }
@@ -29,9 +30,11 @@ plugins {
 
 rootProject.name = 'module-ballerinax-ai.google.drive'
 
+include ':checkstyle'
 include ':ai.google.drive-native'
 include ':ai.google.drive-ballerina'
 
+project(':checkstyle').projectDir = file("build-config${File.separator}checkstyle")
 project(':ai.google.drive-native').projectDir = file("native")
 project(':ai.google.drive-ballerina').projectDir = file("ballerina")
 

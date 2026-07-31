@@ -59,8 +59,8 @@ const string EXPORT_MIME_TEXT = "text/plain";
 const string EXPORT_MIME_CSV = "text/csv";
 
 # Classifies a Drive file by how its text is obtained. The Drive MIME type is authoritative
-# and is checked first (Workspace native types, then binary types); the file-name extension
-# is a fallback for binary files whose MIME type is missing or generic.
+# and settles the class on its own (Workspace native types, then binary types); the file-name
+# extension is consulted only for binary files whose MIME type is missing or unrecognised.
 #
 # + mimeType - the file's Drive MIME type (`()` if unknown)
 # + fileName - the file name, used for extension fallback
@@ -82,17 +82,25 @@ isolated function classify(string? mimeType, string fileName) returns FileClass 
         return UNSUPPORTED;
     }
 
-    // Ordinary binary file: classify by MIME type, then extension.
-    string extension = getExtension(fileName);
-    if mime.startsWith("text/") || (mime != "" && TEXT_MIME_TYPES.indexOf(mime) !is ())
-            || TEXT_EXTENSIONS.indexOf(extension) !is () {
+    // Ordinary binary file. A recognised MIME type settles the class on its own — Drive lets a
+    // file be renamed independently of its MIME type, so consulting the extension first would
+    // let `report.pdf` renamed to `notes.txt` be UTF-8 decoded instead of Tika-extracted.
+    if mime.startsWith("text/") || (mime != "" && TEXT_MIME_TYPES.indexOf(mime) !is ()) {
         return TEXT_DOWNLOAD;
     }
     // PDFs and uploaded Microsoft Office documents are downloaded and text-extracted via
     // Apache Tika (PDFBox for PDF, POI for Office). Google Workspace natives were already
     // routed to the EXPORT path above, so they never reach this Tika lane.
-    if (mime != "" && EXTRACTABLE_MIME_TYPES.indexOf(mime) !is ())
-            || EXTRACTABLE_EXTENSIONS.indexOf(extension) !is () {
+    if mime != "" && EXTRACTABLE_MIME_TYPES.indexOf(mime) !is () {
+        return EXTRACT_DOWNLOAD;
+    }
+
+    // Extension fallback, reached only when the MIME type is missing or unrecognised.
+    string extension = getExtension(fileName);
+    if TEXT_EXTENSIONS.indexOf(extension) !is () {
+        return TEXT_DOWNLOAD;
+    }
+    if EXTRACTABLE_EXTENSIONS.indexOf(extension) !is () {
         return EXTRACT_DOWNLOAD;
     }
     return UNSUPPORTED;
@@ -350,6 +358,13 @@ isolated function htmlToText(string html) returns string = @java:Method {
 // TEXTLESS_PDF_REASON in TextExtractor.java. This is a data contract, not a message contract:
 // rewording the human-readable message cannot change how the loader behaves.
 const string TEXTLESS_PDF_REASON = "TEXTLESS_PDF";
+
+// The extractor also refuses a file on size, attaching a `DOCUMENT_TOO_LARGE` or
+// `EXTRACTED_TEXT_TOO_LARGE` reason (see TextExtractor.java) — bounds on the loader's own heap,
+// since an unbounded extraction can exhaust the process and take every concurrent load with it.
+// No constant is declared for either: unlike a text-less PDF, nothing here branches on them. A
+// folder walk skips them like any other per-file failure, and an explicitly named file surfaces
+// the error, so the caller learns the file was refused rather than getting a truncated document.
 
 # Reports whether an error denotes a text-less PDF (scanned/image-only or blank). The loader
 # uses this to skip such files in folder listings (with a warning) — like other non-text

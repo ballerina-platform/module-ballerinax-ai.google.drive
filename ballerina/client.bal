@@ -50,8 +50,10 @@ final http:ResponseLimitConfigs & readonly DEFAULT_RESPONSE_LIMITS = {
 // unbounded response body. Both are filled in here when the caller supplied neither — an
 // explicit value always wins, including one that deliberately disables retrying.
 isolated function newDriveClient(drive:ConnectionConfig config) returns drive:Client|ai:Error {
-    // Cloned before defaulting so the caller's own record is never mutated.
-    drive:ConnectionConfig effective = config.clone();
+    // A spread copy rather than `clone()`, which returns a readonly value unchanged and would
+    // make the defaulting below fail on an immutable caller config. This copy is always mutable,
+    // and the caller's own record is never touched.
+    drive:ConnectionConfig effective = {...config};
     if effective.retryConfig is () {
         effective.retryConfig = DEFAULT_RETRY_CONFIG;
     }
