@@ -60,13 +60,13 @@ isolated function testInitRejectsEmptySources() {
 isolated function testInitConstructsForFolderSource() returns error? {
     // A bearer-token config constructs offline (no token endpoint call at init).
     drive:ConnectionConfig config = {auth: {token: "ya29.test-access-token"}};
-    TextDataLoader _ = check new (config, [{folderId: "1FolderId", recursive: true}]);
+    TextDataLoader _ = check new (config, [{folder: "1FolderId", recursive: true}]);
 }
 
 @test:Config {}
 isolated function testInitConstructsForFileIdsSource() returns error? {
     drive:ConnectionConfig config = {auth: {token: "ya29.test-access-token"}};
-    TextDataLoader _ = check new (config, [{fileIds: ["1File", "2File"]}]);
+    TextDataLoader _ = check new (config, [{files: ["1File", "2File"]}]);
 }
 
 // ---- init: reusing a caller-supplied client -----------------------------------
@@ -78,7 +78,7 @@ isolated function testInitAcceptsAnExistingClient() returns error? {
     // is NOT owned by the loader. (A bearer-token client constructs offline.)
     drive:ConnectionConfig config = {auth: {token: "ya29.test-access-token"}};
     drive:Client existingClient = check newDriveClient(config);
-    TextDataLoader _ = check new (existingClient, [{folderId: "1FolderId", recursive: true}]);
+    TextDataLoader _ = check new (existingClient, [{folder: "1FolderId", recursive: true}]);
 }
 
 @test:Config {}
@@ -186,36 +186,30 @@ isolated function testDescribeContentFailureLeavesOtherErrorsAlone() {
 }
 
 // ---- init: source validation happens up front ---------------------------------
-// REGRESSION: `folderId`/`folderUrl` ambiguity and URL parsing used to be deferred to load(),
-// so a misconfigured source only failed after some documents had been fetched and discarded.
-
-@test:Config {}
-isolated function testInitRejectsAmbiguousFolderSelector() {
-    drive:ConnectionConfig config = {auth: {token: "ya29.test-access-token"}};
-    TextDataLoader|error loader = new (config, [{
-        folderId: "1FolderId",
-        folderUrl: "https://drive.google.com/drive/folders/1Other"
-    }]);
-    if loader is error {
-        test:assertTrue(loader.message().includes("at most one"), loader.message());
-    } else {
-        test:assertFail("Setting both folderId and folderUrl must fail at init, not at load time");
-    }
-}
+// REGRESSION: URL parsing used to be deferred to load(), so a source naming an unparseable
+// share URL only failed after some documents had been fetched and discarded.
 
 @test:Config {}
 isolated function testInitRejectsUnparseableFolderUrl() {
     drive:ConnectionConfig config = {auth: {token: "ya29.test-access-token"}};
     TextDataLoader|error loader =
-        new (config, [{folderUrl: "https://drive.google.com/drive/my-drive"}]);
+        new (config, [{folder: "https://drive.google.com/drive/my-drive"}]);
     test:assertTrue(loader is error, "a URL with no extractable ID must fail at init");
+}
+
+@test:Config {}
+isolated function testInitRejectsUnparseableFileUrl() {
+    drive:ConnectionConfig config = {auth: {token: "ya29.test-access-token"}};
+    TextDataLoader|error loader =
+        new (config, [{files: ["https://drive.google.com/drive/my-drive"]}]);
+    test:assertTrue(loader is error, "an unparseable entry in 'files' must fail at init");
 }
 
 @test:Config {}
 isolated function testInitResolvesFolderUrlUpFront() returns error? {
     drive:ConnectionConfig config = {auth: {token: "ya29.test-access-token"}};
     TextDataLoader _ = check new (config,
-            [{folderUrl: "https://drive.google.com/drive/folders/1Fff?usp=drive_link"}]);
+            [{folder: "https://drive.google.com/drive/folders/1Fff?usp=drive_link"}]);
 }
 
 @test:Config {}

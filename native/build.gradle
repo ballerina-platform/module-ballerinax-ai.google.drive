@@ -15,9 +15,13 @@
  * limitations under the License.
  */
 
+import com.github.spotbugs.snom.Confidence
+import com.github.spotbugs.snom.Effort
+
 plugins {
     id 'java'
     id 'checkstyle'
+    id 'com.github.spotbugs'
 }
 
 description = 'Google Drive document data loader - Java native utils'
@@ -56,4 +60,27 @@ checkstyleTest.enabled = false
 
 tasks.withType(Checkstyle).configureEach {
     dependsOn(':checkstyle:downloadCheckstyleRuleFiles')
+    // Checkstyle 10.12.0's Java grammar cannot parse a module declaration at all — even a bare
+    // `module foo {}` fails with "no viable alternative at input 'module'" — and a parse failure
+    // aborts the whole task rather than skipping the one file.
+    exclude '**/module-info.java'
 }
+
+spotbugsMain {
+    effort = Effort.MAX
+    // `Confidence` is a Kotlin enum whose constants have class bodies, so Groovy resolves
+    // `Confidence.LOW` to the nested class rather than the constant; look it up by name.
+    reportLevel = Confidence.valueOf('LOW')
+    reportsDir = file("$project.buildDir/reports/spotbugs")
+    reports {
+        html.required.set(true)
+        text.required.set(true)
+    }
+    def excludeFile = file("${projectDir}/spotbugs-exclude.xml")
+    if (excludeFile.exists()) {
+        excludeFilter = excludeFile
+    }
+}
+
+// Only the production sources are analysed, matching the Checkstyle setup above.
+spotbugsTest.enabled = false

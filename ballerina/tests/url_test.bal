@@ -84,23 +84,22 @@ isolated function testDriveIdFromUrlErrorsOnEmpty() {
 // ---- resolveFileIds / resolveFolderId (the loader's URL resolution) ----------
 
 @test:Config {}
-isolated function testResolveFileIdsCombinesIdsAndUrls() returns error? {
+isolated function testResolveFileIdsMixesIdsAndUrls() returns error? {
+    // `files` accepts either form in any order, and each entry resolves to a Drive ID.
     Source src = {
-        fileIds: ["idOne", "idTwo"],
-        fileUrls: [string `https://drive.google.com/file/d/${ID}/view`]
+        files: ["idOne", string `https://drive.google.com/file/d/${ID}/view`, "idTwo"]
     };
     string[] resolved = check resolveFileIds(src);
-    test:assertEquals(resolved, ["idOne", "idTwo", ID], "IDs first, then URL-resolved IDs");
+    test:assertEquals(resolved, ["idOne", ID, "idTwo"], "entries resolve in order");
 }
 
 @test:Config {}
 isolated function testResolveFileIdsOnReadonlySource() returns error? {
     // The loader stores sources via `cloneReadOnly`, so `resolveFileIds` must build a fresh
-    // mutable array rather than mutating (a clone of) the readonly `fileIds` — otherwise it
+    // mutable array rather than mutating (a clone of) the readonly `files` — otherwise it
     // panics with "modification not allowed on readonly value".
     readonly & Source src = {
-        fileIds: ["idOne"],
-        fileUrls: [string `https://drive.google.com/file/d/${ID}/view`]
+        files: ["idOne", string `https://drive.google.com/file/d/${ID}/view`]
     };
     string[] resolved = check resolveFileIds(src);
     test:assertEquals(resolved, ["idOne", ID]);
@@ -113,28 +112,25 @@ isolated function testResolveFileIdsEmpty() returns error? {
 }
 
 @test:Config {}
+isolated function testResolveFileIdsPropagatesUnparseableUrl() {
+    string[]|ai:Error result = resolveFileIds({files: ["https://drive.google.com/drive/my-drive"]});
+    test:assertTrue(result is ai:Error, "a URL carrying no Drive ID is an error");
+}
+
+@test:Config {}
 isolated function testResolveFolderIdFromUrl() returns error? {
-    string? folderId = check resolveFolderId({folderUrl: string `https://drive.google.com/drive/folders/${ID}`});
+    string? folderId = check resolveFolderId({folder: string `https://drive.google.com/drive/folders/${ID}`});
     test:assertEquals(folderId, ID);
 }
 
 @test:Config {}
 isolated function testResolveFolderIdFromId() returns error? {
-    string? folderId = check resolveFolderId({folderId: "explicitId"});
+    string? folderId = check resolveFolderId({folder: "explicitId"});
     test:assertEquals(folderId, "explicitId");
 }
 
 @test:Config {}
 isolated function testResolveFolderIdNoneIsNil() returns error? {
-    string? folderId = check resolveFolderId({fileIds: ["x"]});
+    string? folderId = check resolveFolderId({files: ["x"]});
     test:assertTrue(folderId is (), "a source with no folder resolves to ()");
-}
-
-@test:Config {}
-isolated function testResolveFolderIdBothIsError() {
-    string?|ai:Error result = resolveFolderId({
-        folderId: "explicitId",
-        folderUrl: string `https://drive.google.com/drive/folders/${ID}`
-    });
-    test:assertTrue(result is ai:Error, "setting both folderId and folderUrl is ambiguous -> error");
 }

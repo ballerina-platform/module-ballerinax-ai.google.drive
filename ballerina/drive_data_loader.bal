@@ -49,17 +49,17 @@ public isolated class TextDataLoader {
     # client, token acquisition and refresh likewise stay the caller's concern — the loader
     # only issues requests through the client it is given.
     #
-    # Every source is fully validated here rather than at load time: share URLs are resolved to
-    # Drive IDs and the "at most one of `folderId`/`folderUrl`" rule is enforced, so a
-    # misconfigured source fails immediately instead of part-way through a long load, after
-    # documents have already been fetched and then discarded.
+    # Every source is fully validated here rather than at load time: each `folder`/`files` entry
+    # is resolved to a Drive ID, so a source naming an unparseable share URL fails immediately
+    # instead of part-way through a long load, after documents have already been fetched and
+    # then discarded.
     #
-    # + connection - The Google Drive connector configuration shared by all sources, or an
-    #                existing `drive:Client` to reuse (not owned by the loader)
+    # + driveConnection - The Google Drive connector configuration shared by all sources, or an
+    #                     existing `drive:Client` to reuse (not owned by the loader)
     # + sources - One or more Drive folders and/or file IDs to load documents from
     # + return - An `ai:Error` if the connection could not be established or a source is invalid
     public isolated function init(
-            @display {label: "Connection"} drive:ConnectionConfig|drive:Client connection,
+            @display {label: "Connection"} drive:ConnectionConfig|drive:Client driveConnection,
             @display {label: "Data Sources"} Source[] sources) returns ai:Error? {
         // Validated before the connection is resolved, so it applies to both forms.
         if sources.length() == 0 {
@@ -74,7 +74,7 @@ public isolated class TextDataLoader {
             // outcome from a clear failure in one case and total silence in the other.
             if folderId is () && fileIds.length() == 0 {
                 log:printWarn("A Google Drive source selects nothing and will load no documents; " +
-                        "set one of 'folderId', 'folderUrl', 'fileIds' or 'fileUrls'");
+                        "set 'folder' or 'files'");
             }
             resolved.push({
                 folderId,
@@ -84,7 +84,9 @@ public isolated class TextDataLoader {
             });
         }
         self.sources = resolved.cloneReadOnly();
-        self.driveClient = connection is drive:Client ? connection : check newDriveClient(connection);
+        self.driveClient = driveConnection is drive:Client
+            ? driveConnection
+            : check newDriveClient(driveConnection);
     }
 
     # Loads the configured Google Drive documents.
@@ -122,11 +124,11 @@ public isolated class TextDataLoader {
         if file.trashed == true {
             return error ai:Error(string `File ID '${fileId}' is in the trash and cannot be loaded`);
         }
-        // A folder ID in `fileIds` classifies as UNSUPPORTED, so without this it would be
+        // A folder ID in `files` classifies as UNSUPPORTED, so without this it would be
         // reported as an unsupported file type — true but unhelpful. Name the actual mistake.
         if file.mimeType == GOOGLE_FOLDER_MIME {
             return error ai:Error(string `The ID '${fileId}' refers to a folder, not a file; ` +
-                string `use 'folderId' (or 'folderUrl') to load a folder's contents`);
+                string `use 'folder' to load a folder's contents`);
         }
         FileClass fileClass = classify(file.mimeType, file.name ?: "");
         if !isSupported(fileClass) {
@@ -366,34 +368,25 @@ isolated function childrenQuery(string folderId) returns string {
     return string `'${escaped}' in parents and trashed = false`;
 }
 
-// Resolves a source's folder to a single Drive ID from `folderId` or `folderUrl` (a URL is
-// parsed via `driveIdFromUrl`). Setting both is ambiguous and is an error; `()` means the
+// Resolves a source's `folder` to a Drive ID. The field accepts an ID or a share URL, and
+// `driveIdFromUrl` passes a bare ID through unchanged, so one call covers both. `()` means the
 // source names no folder.
 isolated function resolveFolderId(Source src) returns string?|ai:Error {
-    string? folderId = src.folderId;
-    string? folderUrl = src.folderUrl;
-    if folderId is string && folderUrl is string {
-        return error ai:Error("A source must set at most one of 'folderId' and 'folderUrl'");
+    string? folder = src.folder;
+    if folder is () {
+        return ();
     }
-    if folderId is string {
-        return folderId;
-    }
-    if folderUrl is string {
-        return driveIdFromUrl(folderUrl);
-    }
-    return ();
+    return driveIdFromUrl(folder);
 }
 
-// Resolves a source's explicit files to Drive IDs: `fileIds` as given, plus each `fileUrls`
-// entry parsed via `driveIdFromUrl`. The two lists combine (order: IDs, then URL-resolved).
-// A fresh mutable array is built explicitly — `src.fileIds` is readonly (sources are stored
-// via `cloneReadOnly`), and `.clone()` of an immutable value returns it unchanged, so pushing
-// onto a clone would fail with "modification not allowed on readonly value".
+// Resolves a source's explicit `files` to Drive IDs, each entry being an ID or a share URL.
+// A fresh mutable array is built explicitly — `src.files` is readonly (sources are stored via
+// `cloneReadOnly`), and `.clone()` of an immutable value returns it unchanged, so pushing onto
+// a clone would fail with "modification not allowed on readonly value".
 isolated function resolveFileIds(Source src) returns string[]|ai:Error {
     string[] fileIds = [];
-    fileIds.push(...src.fileIds);
-    foreach string fileUrl in src.fileUrls {
-        fileIds.push(check driveIdFromUrl(fileUrl));
+    foreach string file in src.files {
+        fileIds.push(check driveIdFromUrl(file));
     }
     return fileIds;
 }

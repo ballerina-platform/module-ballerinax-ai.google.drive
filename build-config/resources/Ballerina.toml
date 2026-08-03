@@ -10,34 +10,6 @@ keywords = ["Vendor/Google", "Area/AI & Machine Learning", "Type/Data Loader", "
 repository = "https://github.com/ballerina-platform/module-ballerinax-ai.google.drive"
 
 [platform.java21]
-# This template is the source of truth: `updateTomlFiles` regenerates ballerina/Ballerina.toml
-# from it on every build, so editing only the generated file changes nothing that survives.
-#
-# `false` is contagious — Ballerina checks compatibility across the whole dependency graph, so
-# it would mark every downstream package that merely depends on this loader as incompatible,
-# whether or not that package ever extracts an Office file. That cost is real and falls on
-# every consumer; the risk below falls only on someone building a native image.
-#
-# OUTSTANDING: the native-image metadata for the text-extraction stack has not been generated
-# or verified. Only `-H:+AddAllCharsets` is declared (see native-image.properties). Apache POI
-# and XMLBeans are reflection- and resource-driven — poi-ooxml-lite resolves schema types
-# reflectively, XMLBeans loads `.xsb` resources from the jar by name, PDFBox loads font and
-# glyphlist resources — and none of that is reachable by native-image's static analysis without
-# reflect-config.json / resource-config.json. A native image would still *compile*; Office
-# extraction could then fail at runtime with ClassNotFoundException or SchemaTypeLoaderException.
-#
-# The usual Tika blocker is already designed around: the extractor selects PDFParser/OOXMLParser/
-# OfficeParser explicitly rather than via AutoDetectParser, and embedded-document extraction is
-# disabled — so much of the stack may already work. To confirm and close this out:
-#   1. Run the test suite on a GraalVM JDK with the tracing agent attached, e.g.
-#      JAVA_TOOL_OPTIONS="-agentlib:native-image-agent=config-output-dir=<dir>" bal test
-#      (the suite already extracts real pdf/docx/xlsx/pptx/doc/xls/ppt fixtures, which is the
-#      coverage the agent needs)
-#   2. Commit the generated configs under
-#      native/src/main/resources/META-INF/native-image/io.ballerina.lib/ai.google.drive-native/
-#   3. Verify with `bal build --graalvm` that Office AND PDF extraction both still work.
-# Generated metadata is the only kind worth committing — hand-written guesses at POI's
-# reflective surface would be no more trustworthy than declaring compatibility untested.
 graalvmCompatible = true
 
 # Native text extractor (Apache Tika) for this package.
