@@ -1,0 +1,86 @@
+/*
+ * Copyright (c) 2026, WSO2 LLC. (http://www.wso2.com).
+ *
+ * WSO2 LLC. licenses this file to you under the Apache License,
+ * Version 2.0 (the "License"); you may not use this file except
+ * in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import com.github.spotbugs.snom.Confidence
+import com.github.spotbugs.snom.Effort
+
+plugins {
+    id 'java'
+    id 'checkstyle'
+    id 'com.github.spotbugs'
+}
+
+description = 'Google Drive document data loader - Java native utils'
+
+dependencies {
+    // Provided by the Ballerina runtime at execution time.
+    implementation group: 'org.ballerinalang', name: 'ballerina-runtime', version: "${ballerinaLangVersion}"
+
+    // Apache Tika: text extraction for uploaded PDF and Microsoft Office documents.
+    // Compiled against here; the same jars (plus the POI runtime stack) are declared as
+    // platform dependencies in Ballerina.toml. The extractor selects the parser explicitly
+    // (PDFBox for PDF, POI for Office); Google Workspace natives are exported, not routed here.
+    implementation group: 'org.apache.tika', name: 'tika-core', version: "${tikaVersion}"
+    implementation group: 'org.apache.tika', name: 'tika-parser-pdf-module', version: "${tikaVersion}"
+    implementation group: 'org.apache.tika', name: 'tika-parser-microsoft-module', version: "${tikaVersion}"
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+// The WSO2 checkstyle rules are downloaded by the `:checkstyle` project rather than committed,
+// so they do not exist until `:checkstyle:downloadCheckstyleRuleFiles` has run — which the task
+// dependency below guarantees before any Checkstyle task reads these paths.
+checkstyle {
+    toolVersion = "${project.checkstylePluginVersion}"
+    configFile = rootProject.file("build-config/checkstyle/build/checkstyle.xml")
+    configProperties = [
+            'suppressionFile': rootProject.file("build-config/checkstyle/build/suppressions.xml")
+    ]
+}
+
+// Only the production sources are linted; the WSO2 ruleset is written for them.
+checkstyleTest.enabled = false
+
+tasks.withType(Checkstyle).configureEach {
+    dependsOn(':checkstyle:downloadCheckstyleRuleFiles')
+    // Checkstyle 10.12.0's Java grammar cannot parse a module declaration at all — even a bare
+    // `module foo {}` fails with "no viable alternative at input 'module'" — and a parse failure
+    // aborts the whole task rather than skipping the one file.
+    exclude '**/module-info.java'
+}
+
+spotbugsMain {
+    effort = Effort.MAX
+    // `Confidence` is a Kotlin enum whose constants have class bodies, so Groovy resolves
+    // `Confidence.LOW` to the nested class rather than the constant; look it up by name.
+    reportLevel = Confidence.valueOf('LOW')
+    reportsDir = file("$project.buildDir/reports/spotbugs")
+    reports {
+        html.required.set(true)
+        text.required.set(true)
+    }
+    def excludeFile = file("${projectDir}/spotbugs-exclude.xml")
+    if (excludeFile.exists()) {
+        excludeFilter = excludeFile
+    }
+}
+
+// Only the production sources are analysed, matching the Checkstyle setup above.
+spotbugsTest.enabled = false
