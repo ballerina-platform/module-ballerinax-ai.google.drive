@@ -81,52 +81,52 @@ isolated function testDriveIdFromUrlErrorsOnEmpty() {
     test:assertTrue(driveIdFromUrl("   ") is ai:Error, "whitespace-only is empty");
 }
 
-// ---- resolveItemIds (the loader's URL resolution) ---------------------------
+// ---- resolveResourceIds (the loader's URL resolution) ---------------------------
 
 @test:Config {}
-isolated function testResolveItemIdsMixesIdsAndUrls() returns error? {
-    // `items` accepts either form in any order, and each entry resolves to a Drive ID.
+isolated function testResolveResourceIdsMixesIdsAndUrls() returns error? {
+    // `resourceIds` accepts either form in any order, and each entry resolves to a Drive ID.
     Source src = {
-        items: ["idOne", string `https://drive.google.com/file/d/${ID}/view`, "idTwo"]
+        resourceIds: ["idOne", string `https://drive.google.com/file/d/${ID}/view`, "idTwo"]
     };
-    string[] resolved = check resolveItemIds(src);
+    string[] resolved = check resolveResourceIds(src);
     test:assertEquals(resolved, ["idOne", ID, "idTwo"], "entries resolve in order");
 }
 
 @test:Config {}
-isolated function testResolveItemIdsMixesFilesAndFolders() returns error? {
-    // File and folder URLs resolve identically: `items` draws no distinction, and which kind
+isolated function testResolveResourceIdsMixesFilesAndFolders() returns error? {
+    // File and folder URLs resolve identically: `resourceIds` draws no distinction, and which kind
     // of thing an ID names is settled at load time from its Drive MIME type.
     Source src = {
-        items: [
+        resourceIds: [
             string `https://drive.google.com/file/d/${ID}/view`,
             string `https://drive.google.com/drive/folders/${ID}`
         ]
     };
-    string[] resolved = check resolveItemIds(src);
+    string[] resolved = check resolveResourceIds(src);
     test:assertEquals(resolved, [ID, ID]);
 }
 
 @test:Config {}
-isolated function testResolveItemIdsOnReadonlySource() returns error? {
-    // The loader stores sources via `cloneReadOnly`, so `resolveItemIds` must build a fresh
-    // mutable array rather than mutating (a clone of) the readonly `items` — otherwise it
+isolated function testResolveResourceIdsOnReadonlySource() returns error? {
+    // The loader stores sources via `cloneReadOnly`, so `resolveResourceIds` must build a fresh
+    // mutable array rather than mutating (a clone of) the readonly `resourceIds` — otherwise it
     // panics with "modification not allowed on readonly value".
     readonly & Source src = {
-        items: ["idOne", string `https://drive.google.com/file/d/${ID}/view`]
+        resourceIds: ["idOne", string `https://drive.google.com/file/d/${ID}/view`]
     };
-    string[] resolved = check resolveItemIds(src);
+    string[] resolved = check resolveResourceIds(src);
     test:assertEquals(resolved, ["idOne", ID]);
 }
 
 @test:Config {}
-isolated function testResolveItemIdsEmpty() returns error? {
-    string[] resolved = check resolveItemIds({});
-    test:assertEquals(resolved, [], "a source with no items resolves to an empty array");
+isolated function testResolveResourceIdsEmpty() returns error? {
+    string[] resolved = check resolveResourceIds({});
+    test:assertEquals(resolved, [], "a source with no resourceIds resolves to an empty array");
 }
 
 @test:Config {}
-isolated function testResolveItemIdsPropagatesUnparseableUrl() {
-    string[]|ai:Error result = resolveItemIds({items: ["https://drive.google.com/drive/my-drive"]});
+isolated function testResolveResourceIdsPropagatesUnparseableUrl() {
+    string[]|ai:Error result = resolveResourceIds({resourceIds: ["https://drive.google.com/drive/my-drive"]});
     test:assertTrue(result is ai:Error, "a URL carrying no Drive ID is an error");
 }

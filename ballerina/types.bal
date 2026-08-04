@@ -19,21 +19,21 @@
 # Unlike a filesystem or Azure Files share, Drive has **no path tree**: every file and
 # folder is addressed by an opaque, stable **ID** (a folder is simply a file whose MIME
 # type is `application/vnd.google-apps.folder`). A `Source` therefore selects content by
-# ID: list the files and/or folders to load in `items`, in any combination.
+# ID: list the files and/or folders to load in `resourceIds`, in any combination.
 #
-# Because Drive draws no distinction between the two, neither does `items` — each entry is
-# resolved to an ID up front, and its Drive MIME type decides at load time whether it is
+# Because Drive draws no distinction between the two, neither does `resourceIds` — each entry
+# is resolved to an ID up front, and its Drive MIME type decides at load time whether it is
 # fetched as a single file or listed as a folder. A folder entry loads every supported file
-# directly inside it, descending into sub-folders when `recursive`; trashed items are always
-# excluded.
+# directly inside it, descending into sub-folders when `recursive`; trashed resources are
+# always excluded.
 #
 # `recursive` and `includeExtensions` shape how a folder entry is expanded, so they have no
-# effect on an entry that turns out to be a file: every entry in `items` is named
+# effect on an entry that turns out to be a file: every entry in `resourceIds` is named
 # deliberately, and a named file is always loaded (subject only to it being a supported
 # type). To apply different expansion settings to different folders, configure one `Source`
 # per setting — several may be given per loader.
 #
-# A source with no `items` loads nothing.
+# A source with no `resourceIds` loads nothing.
 #
 # Entries accept a Drive **ID or a share URL** interchangeably; a URL is resolved to its ID
 # via `driveIdFromUrl`.
@@ -43,7 +43,7 @@ public type Source record {|
     # URL, or `https://drive.google.com/drive/folders/<id>`), from which the ID is
     # extracted. A file entry is loaded as one document; a folder entry is expanded into
     # the supported files it contains. Defaults to `[]`, which selects nothing.
-    string[] items = [];
+    string[] resourceIds = [];
     # Whether sub-folders under a folder entry are traversed. Has no effect on file
     # entries. Defaults to `false`.
     boolean recursive = false;
@@ -55,15 +55,16 @@ public type Source record {|
     string[]? includeExtensions = ();
 |};
 
-// A source with its `items` entries already resolved to Drive IDs. Resolution happens in
-// `init`, so a source naming an unparseable URL fails immediately rather than part-way
-// through a long load, after documents have already been fetched.
+// A source with its `resourceIds` entries already resolved to Drive IDs — the public field
+// also accepts share URLs, so the two are not the same values. Resolution happens in `init`,
+// so a source naming an unparseable URL fails immediately rather than part-way through a long
+// load, after documents have already been fetched.
 //
-// Whether an entry is a file or a folder is NOT resolved here: that needs the Drive MIME
-// type, and fetching it would turn construction into a network operation whose result could
-// be stale by the time `load` runs. `loadItem` decides it from the metadata it fetches anyway.
+// Whether an entry is a file or a folder is NOT resolved here: that needs the Drive MIME type,
+// and fetching it would turn construction into a network operation whose result could be stale
+// by the time `load` runs. `loadResource` decides it from the metadata it fetches anyway.
 type ResolvedSource record {|
-    string[] itemIds;
+    string[] resourceIds;
     boolean recursive;
     string[]? includeExtensions;
 |};
