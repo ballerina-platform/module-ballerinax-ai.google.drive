@@ -28,9 +28,12 @@
 # always excluded.
 #
 # `recursive` shapes how a folder entry is expanded, so it has no effect on an entry that
-# turns out to be a file: every entry in `resourceIds` is named deliberately, and a named
-# file is always loaded (subject only to it being a supported type). To traverse some folders
-# but not others, configure one `Source` per setting — several may be given per loader.
+# turns out to be a file. Every entry in `resourceIds` is named deliberately, so failing to
+# load one — a missing or trashed ID, an unsupported type, or content that cannot be read —
+# is reported as an error rather than skipped; a file merely *discovered* inside a folder
+# entry is skipped with a warning instead, so one unreadable file does not abandon the walk.
+# To traverse some folders but not others, configure one `Source` per setting — several may
+# be given per loader.
 #
 # A source with no `resourceIds` loads nothing.
 #
@@ -43,9 +46,8 @@ public type Source record {|
     # extracted. A file entry is loaded as one document; a folder entry is expanded into
     # the supported files it contains. Defaults to `[]`, which selects nothing.
     string[] resourceIds = [];
-    # The recusive is applicable only when the `resourceIds` entry is a folder. It determines whether to traverse sub-folders.
-    # Whether sub-folders under a folder entry are traversed. Has no effect on file
-    # entries. Defaults to `false`.
+    # The recursive is applicable only when the `resourceIds` entry is a folder. It determines
+    # whether to traverse sub-folders. Defaults to `false`.
     boolean recursive = false;
 |};
 
