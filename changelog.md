@@ -2,6 +2,18 @@
 
 This file documents all significant changes made to the Ballerina ai.google.drive package across releases.
 
+## [Unreleased]
+
+### Changed
+
+- **Breaking:** `Source.folder` and `Source.files` are replaced by a single `Source.items` list
+  holding files and/or folders in any combination. Drive addresses both by the same kind of
+  opaque ID, so an entry's Drive MIME type — not the field it was written in — now decides
+  whether it is fetched as one file or expanded as a folder. `recursive` and `includeExtensions`
+  are unchanged and still shape folder expansion only; use one `Source` per expansion setting.
+  A source that names a folder where a file was intended now loads that folder rather than
+  reporting the mismatch, since the merged field no longer records which kind was expected.
+
 ## [1.0.0] - 2026-07-30
 
 ### Added

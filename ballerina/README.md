@@ -16,22 +16,33 @@ Because Drive addresses everything by an opaque **ID** (a folder is just a file 
 
 ## The ID-based `Source` model
 
-Each `Source` selects content by **ID or share URL** — both fields accept either form, interchangeably — in ways that may be combined:
+Each `Source` lists what to load in `items`, by **ID or share URL** — either form, interchangeably, in any combination:
 
 | Field | Meaning |
 | --- | --- |
-| `folder` | The folder to load, as a folder ID **or** its share URL (e.g. `https://drive.google.com/drive/folders/<id>`). Loads every supported file directly inside it; set `recursive` to also descend into sub-folders. Trashed files are always excluded. |
-| `files` | Load these exact files, regardless of folder. Each entry is a file ID **or** a share URL (e.g. `https://drive.google.com/file/d/<id>/view`, or a Docs `.../d/<id>/edit` URL). An explicitly named file is always loaded (subject to being a supported type) and **bypasses** `includeExtensions`. |
-| `recursive` | Whether sub-folders under the resolved folder are traversed (default `false`). |
-| `includeExtensions` | Case-insensitive extension allowlist applied to **folder listings only**. Entries may include or omit a leading dot. Note: Workspace files have no extension, so an allowlist excludes them from listings. |
+| `items` | The files and/or folders to load. Each entry is an ID **or** a share URL (`https://drive.google.com/file/d/<id>/view`, a Docs `.../d/<id>/edit` URL, or `https://drive.google.com/drive/folders/<id>`). A **file** entry becomes one document; a **folder** entry expands into every supported file directly inside it. Trashed items are always excluded. |
+| `recursive` | Whether sub-folders under a folder entry are traversed (default `false`). No effect on file entries. |
+| `includeExtensions` | Case-insensitive extension allowlist applied to the files **found inside a folder entry**. Entries may include or omit a leading dot. No effect on a file entry, which is named deliberately and so is never filtered out. Note: Workspace files have no extension, so an allowlist excludes them from listings. |
 
-A source with neither `folder` nor `files` loads nothing, and logs a warning saying so.
+Drive draws no distinction between a file and a folder — a folder is simply a file with the folder MIME type, and both are addressed by the same kind of opaque ID — so `items` draws none either. Which entry is which is settled at **load** time from the Drive MIME type, not from where you put it.
 
-Every source is validated when the loader is **constructed**, not when `load()` runs: each `folder`/`files` entry is resolved to a Drive ID up front, so a configuration mistake fails immediately rather than part-way through a long load.
+Because `recursive` and `includeExtensions` shape how a *folder* entry expands, group entries that need different expansion settings into separate sources:
+
+```ballerina
+[
+    {items: ["1SpecsFolderId"], recursive: true, includeExtensions: [".md"]},
+    {items: ["1ReleaseNotesFolderId"]},          // top level only, all types
+    {items: ["1DocId...", "1PdfId..."]}          // two individual files
+]
+```
+
+A source with no `items` loads nothing, and logs a warning saying so.
+
+Every source is validated when the loader is **constructed**, not when `load()` runs: each `items` entry is resolved to a Drive ID up front, so a configuration mistake fails immediately rather than part-way through a long load. Whether an ID names a file or a folder is *not* resolved then — that needs a Drive round trip, and its answer could be stale by the time `load()` runs.
 
 > **IDs vs URLs:** internally the loader is ID-based; accepting a URL is a convenience — a bare
-> ID is passed through unchanged. A folder ID is the last path segment of
-> `https://drive.google.com/drive/folders/<id>`; a file ID is the `<id>` in
+> ID is passed through unchanged, and a URL is reduced to the same ID. A folder ID is the last
+> path segment of `https://drive.google.com/drive/folders/<id>`; a file ID is the `<id>` in
 > `https://drive.google.com/file/d/<id>/view` (or `.../d/<id>/edit` for Docs Editors files, or
 > the `id=` parameter of an `open?id=<id>` link). A link identifies a file but does **not** grant
 > access — reading still requires that your credentials can see it.
@@ -68,7 +79,7 @@ A scanned PDF is page *images* in a PDF container, and a blank PDF has no conten
 The two selection modes differ deliberately:
 
 - A file **discovered in a folder listing** that cannot be loaded — for any reason: a text-less PDF, content that will not decode, an export above Drive's size cap, a file flagged as abusive, a permissions error on that one file — is **skipped with a logged warning, and the walk continues**. One unreadable file never discards the documents already collected, nor abandons the rest of the folder. When anything was skipped, a per-folder summary records how many loaded and how many did not.
-- A file **named explicitly** in `files` that cannot be loaded is an **`ai:Error`**. Naming a file expresses intent, so failing to load it is a mistake worth reporting rather than a silent skip.
+- An item **named explicitly** in `items` that cannot be loaded is an **`ai:Error`**. Naming something expresses intent, so failing to load it is a mistake worth reporting rather than a silent skip. This covers a missing or trashed ID, an unsupported file type, and content that will not decode or extract.
 
 The same asymmetry applies to unsupported types and trashed files.
 
@@ -121,13 +132,14 @@ public function main() returns error? {
     };
 
     drive:TextDataLoader loader = check new (connectionConfig, [
-        // Load a whole folder, descending into its sub-folders.
-        {folder: "1AbCdEfGhIjKlMnOpQrStUvWxYz", recursive: true},
-        // Plus two specific files by ID (e.g. a Google Doc and a PDF).
-        {files: ["1DocId...", "1PdfId..."]},
-        // …or paste share URLs directly — the same two fields accept them:
-        {folder: "https://drive.google.com/drive/folders/1FolderId..."},
-        {files: ["https://drive.google.com/file/d/1FileId.../view"]}
+        // A whole folder, descending into its sub-folders, plus two individual files
+        // (e.g. a Google Doc and a PDF) — folders and files go in the same list.
+        {items: ["1AbCdEfGhIjKlMnOpQrStUvWxYz", "1DocId...", "1PdfId..."], recursive: true},
+        // …or paste share URLs directly — the same field accepts them, either kind:
+        {items: [
+            "https://drive.google.com/drive/folders/1FolderId...",
+            "https://drive.google.com/file/d/1FileId.../view"
+        ]}
     ]);
 
     ai:Document[]|ai:Document result = check loader.load();
@@ -146,7 +158,7 @@ drive:Client existingClient = check new (connectionConfig);
 // … your own Drive calls …
 
 drive:TextDataLoader loader = check new (existingClient, [
-    {folder: "1SpecsFolderId", recursive: true}
+    {items: ["1SpecsFolderId"], recursive: true}
 ]);
 ```
 
@@ -164,7 +176,7 @@ provider), not from `ballerina/ai` itself, so substitute the ones you use:
 
 ```ballerina
 drive:TextDataLoader loader = check new (connectionConfig, [
-    {folder: "1SpecsFolderId", recursive: true}
+    {items: ["1SpecsFolderId"], recursive: true}
 ]);
 
 // `AUTO` lets the knowledge base pick a chunker per document type — Markdown loaded from Drive
@@ -238,7 +250,7 @@ Each document's `ai:Metadata` is populated from the Drive file metadata:
 - **Export size limit:** Google caps a single export at 10 MB. This applies only to Workspace natives (Docs/Sheets/Slides). An export that exceeds it is reported by name rather than as raw Drive JSON.
 - **No OCR.** Text-less PDFs (scanned/image-only or blank) are *detected* and reported, not read — the loader ships no OCR engine.
 - **GraalVM native image is not supported yet.** `graalvmCompatible` is `false`: the Apache POI / XMLBeans / Tika stack is reflection- and resource-driven, and the native-image metadata for it has not been generated and verified.
-- **No de-duplication.** The same file named twice in `files`, or named explicitly *and* also reached through a loaded folder, yields one document per occurrence.
+- **No de-duplication.** The same file named twice in `items`, or named explicitly *and* also reached through a loaded folder, yields one document per occurrence.
 - **No cycle or depth guard on recursion.** Drive has been single-parent since 2020, so a folder cycle is not constructible today, but there is no `maxDepth` limit.
 - **Embedded objects inside Office files** (thumbnails, OLE attachments) are intentionally not recursed into — only the document's own text is extracted.
 - **Encrypted or password-protected documents** are not decrypted.

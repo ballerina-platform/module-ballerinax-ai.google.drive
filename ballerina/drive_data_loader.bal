@@ -49,14 +49,14 @@ public isolated class TextDataLoader {
     # client, token acquisition and refresh likewise stay the caller's concern — the loader
     # only issues requests through the client it is given.
     #
-    # Every source is fully validated here rather than at load time: each `folder`/`files` entry
-    # is resolved to a Drive ID, so a source naming an unparseable share URL fails immediately
+    # Every source is fully validated here rather than at load time: each `items` entry is
+    # resolved to a Drive ID, so a source naming an unparseable share URL fails immediately
     # instead of part-way through a long load, after documents have already been fetched and
     # then discarded.
     #
     # + driveConnection - The Google Drive connector configuration shared by all sources, or an
     #                     existing `drive:Client` to reuse (not owned by the loader)
-    # + sources - One or more Drive folders and/or file IDs to load documents from
+    # + sources - One or more Drive files and/or folders to load documents from
     # + return - An `ai:Error` if the connection could not be established or a source is invalid
     public isolated function init(
             @display {label: "Connection"} drive:ConnectionConfig|drive:Client driveConnection,
@@ -67,18 +67,16 @@ public isolated class TextDataLoader {
         }
         ResolvedSource[] resolved = [];
         foreach Source src in sources {
-            string? folderId = check resolveFolderId(src);
-            string[] fileIds = check resolveFileIds(src);
+            string[] itemIds = check resolveItemIds(src);
             // A source that names nothing loads nothing. Silently returning zero documents here
             // while an empty `sources` array is a hard error would give the caller the same
             // outcome from a clear failure in one case and total silence in the other.
-            if folderId is () && fileIds.length() == 0 {
+            if itemIds.length() == 0 {
                 log:printWarn("A Google Drive source selects nothing and will load no documents; " +
-                        "set 'folder' or 'files'");
+                        "set 'items'");
             }
             resolved.push({
-                folderId,
-                fileIds,
+                itemIds,
                 recursive: src.recursive,
                 includeExtensions: src.includeExtensions
             });
@@ -98,15 +96,11 @@ public isolated class TextDataLoader {
         // Sources arrive already resolved to Drive IDs (see `init`), so the load path is purely
         // ID-based and cannot fail on a configuration mistake half-way through.
         foreach ResolvedSource src in self.sources {
-            // Explicitly named files are always loaded (subject to being a supported type) and
-            // bypass the extension filter — the filter applies to folder listings only.
-            foreach string fileId in src.fileIds {
-                ai:TextDocument document = check self.loadNamedFile(fileId);
-                documents.push(document);
-            }
-            string? folderId = src.folderId;
-            if folderId is string {
-                ai:Document[] loaded = check self.loadFolder(folderId, src.recursive, src.includeExtensions);
+            foreach string itemId in src.itemIds {
+                // A file entry yields exactly one document, a folder entry any number, so the
+                // result is spread rather than pushed.
+                ai:Document[] loaded =
+                    check self.loadItem(itemId, src.recursive, src.includeExtensions);
                 documents.push(...loaded);
             }
         }
@@ -116,48 +110,38 @@ public isolated class TextDataLoader {
         return documents;
     }
 
-    // Loads a single explicitly named file by ID. Unlike a file discovered in a folder
-    // listing, a deliberately named non-text/Office/trashed file is an ERROR (typo/intent
-    // detection), not a silent skip.
-    private isolated function loadNamedFile(string fileId) returns ai:TextDocument|ai:Error {
-        drive:File file = check self.getFileMetadata(fileId);
-        if file.trashed == true {
-            return error ai:Error(string `File ID '${fileId}' is in the trash and cannot be loaded`);
+    // Loads one explicitly named item, which Drive may resolve to either a file or a folder:
+    // both are addressed by an opaque ID and only the MIME type tells them apart. That MIME
+    // type arrives with the metadata this fetch needs anyway, so the routing decision costs
+    // nothing beyond the request every path already makes.
+    //
+    // A named item is loaded deliberately, so ITS OWN failures are errors (typo/intent
+    // detection), never silent skips: a trashed item, an unsupported file type, or content
+    // that will not load. Files merely *discovered* inside a named folder keep the listing's
+    // skip-and-continue policy — see `listFolder`.
+    private isolated function loadItem(string itemId, boolean recursive, string[]? includeExtensions)
+            returns ai:Document[]|ai:Error {
+        drive:File item = check self.getFileMetadata(itemId);
+        // Checked ahead of the file/folder split because it applies to both: a trashed file
+        // cannot be fetched, and a trashed folder lists no children, so without this check a
+        // trashed folder would quietly load nothing instead of naming the mistake.
+        if item.trashed == true {
+            return error ai:Error(string `ID '${itemId}' is in the trash and cannot be loaded`);
         }
-        // A folder ID in `files` classifies as UNSUPPORTED, so without this it would be
-        // reported as an unsupported file type — true but unhelpful. Name the actual mistake.
-        if file.mimeType == GOOGLE_FOLDER_MIME {
-            return error ai:Error(string `The ID '${fileId}' refers to a folder, not a file; ` +
-                string `use 'folder' to load a folder's contents`);
+        // Folder or file — the only signal is the MIME type. Expansion settings apply solely
+        // to this branch; a file entry is named deliberately and so is never filtered.
+        if item.mimeType == GOOGLE_FOLDER_MIME {
+            return self.listFolder(itemId, recursive, includeExtensions);
         }
-        FileClass fileClass = classify(file.mimeType, file.name ?: "");
+        FileClass fileClass = classify(item.mimeType, item.name ?: "");
         if !isSupported(fileClass) {
-            return error ai:Error(string `Unsupported (non-text) file type for file ID '${fileId}' ` +
-                string `(MIME type '${file.mimeType ?: "unknown"}')`);
+            return error ai:Error(string `Unsupported (non-text) file type for ID '${itemId}' ` +
+                string `(MIME type '${item.mimeType ?: "unknown"}')`);
         }
         // A named text-less PDF (scanned/image-only or blank) surfaces the descriptive
         // extraction error (from `fetchAndBuild` -> `buildDocument`) to the caller, exactly
         // like any other explicitly named unreadable file.
-        return self.fetchAndBuild(file, fileClass);
-    }
-
-    // Loads a whole folder. The folder ID is first validated (typo detection): a missing ID
-    // is a "not found" error, and a non-folder ID is reported distinctly. Then its supported
-    // files are converted to documents, descending into sub-folders when `recursive`.
-    private isolated function loadFolder(string folderId, boolean recursive, string[]? includeExtensions)
-            returns ai:Document[]|ai:Error {
-        drive:File folder = check self.getFileMetadata(folderId);
-        if folder.mimeType != GOOGLE_FOLDER_MIME {
-            return error ai:Error(string `The ID '${folderId}' does not refer to a folder ` +
-                string `(its MIME type is '${folder.mimeType ?: "unknown"}')`);
-        }
-        // Same typo/intent detection `loadNamedFile` applies: a trashed folder lists no
-        // children, so without this check it would silently return zero documents.
-        if folder.trashed == true {
-            return error ai:Error(
-                string `Folder ID '${folderId}' is in the trash and cannot be loaded`);
-        }
-        return self.listFolder(folderId, recursive, includeExtensions);
+        return [check self.fetchAndBuild(item, fileClass)];
     }
 
     // Lists a folder's children as documents and, when `recursive`, descends into each
@@ -168,8 +152,12 @@ public isolated class TextDataLoader {
     // abandon the rest of the folder. A single non-UTF-8 `.txt`, one corrupt PDF, or one 403
     // on one file would otherwise throw away an entire bulk ingestion.
     //
-    // An explicitly named file (`loadNamedFile`) still errors — naming a file expresses intent,
-    // so failing to load it is a mistake worth reporting rather than a silent skip.
+    // An explicitly named item (`loadItem`) still errors — naming a file expresses intent, so
+    // failing to load it is a mistake worth reporting rather than a silent skip.
+    //
+    // The folder itself is never re-validated here: `loadItem` fetched its metadata to route to
+    // this function at all, and a sub-folder reached by recursion came from a listing that
+    // already excluded trashed items and reported its MIME type.
     private isolated function listFolder(string folderId, boolean recursive, string[]? includeExtensions)
             returns ai:Document[]|ai:Error {
         drive:File[] children = check self.listChildren(folderId);
@@ -368,25 +356,17 @@ isolated function childrenQuery(string folderId) returns string {
     return string `'${escaped}' in parents and trashed = false`;
 }
 
-// Resolves a source's `folder` to a Drive ID. The field accepts an ID or a share URL, and
-// `driveIdFromUrl` passes a bare ID through unchanged, so one call covers both. `()` means the
-// source names no folder.
-isolated function resolveFolderId(Source src) returns string?|ai:Error {
-    string? folder = src.folder;
-    if folder is () {
-        return ();
-    }
-    return driveIdFromUrl(folder);
-}
-
-// Resolves a source's explicit `files` to Drive IDs, each entry being an ID or a share URL.
-// A fresh mutable array is built explicitly — `src.files` is readonly (sources are stored via
+// Resolves a source's `items` to Drive IDs, each entry being an ID or a share URL of either a
+// file or a folder. `driveIdFromUrl` passes a bare ID through unchanged, so one call covers
+// both forms; which kind of thing the ID names is settled at load time from its MIME type.
+//
+// A fresh mutable array is built explicitly — `src.items` is readonly (sources are stored via
 // `cloneReadOnly`), and `.clone()` of an immutable value returns it unchanged, so pushing onto
 // a clone would fail with "modification not allowed on readonly value".
-isolated function resolveFileIds(Source src) returns string[]|ai:Error {
-    string[] fileIds = [];
-    foreach string file in src.files {
-        fileIds.push(check driveIdFromUrl(file));
+isolated function resolveItemIds(Source src) returns string[]|ai:Error {
+    string[] itemIds = [];
+    foreach string item in src.items {
+        itemIds.push(check driveIdFromUrl(item));
     }
-    return fileIds;
+    return itemIds;
 }

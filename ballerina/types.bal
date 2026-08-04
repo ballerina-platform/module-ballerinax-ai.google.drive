@@ -19,45 +19,51 @@
 # Unlike a filesystem or Azure Files share, Drive has **no path tree**: every file and
 # folder is addressed by an opaque, stable **ID** (a folder is simply a file whose MIME
 # type is `application/vnd.google-apps.folder`). A `Source` therefore selects content by
-# ID, in one of two ways that may be combined in a single source:
+# ID: list the files and/or folders to load in `items`, in any combination.
 #
-# - **A whole folder** — set `folder` to load every supported file directly inside that
-#   folder, and set `recursive` to also descend into its sub-folders. Trashed files are
-#   always excluded.
-# - **Specific files** — list `files` to load those exact files, regardless of where they
-#   live. An explicitly listed file is always loaded (subject only to it being a supported
-#   type) and bypasses `includeExtensions`.
+# Because Drive draws no distinction between the two, neither does `items` — each entry is
+# resolved to an ID up front, and its Drive MIME type decides at load time whether it is
+# fetched as a single file or listed as a folder. A folder entry loads every supported file
+# directly inside it, descending into sub-folders when `recursive`; trashed items are always
+# excluded.
 #
-# A source with neither `folder` nor `files` loads nothing.
+# `recursive` and `includeExtensions` shape how a folder entry is expanded, so they have no
+# effect on an entry that turns out to be a file: every entry in `items` is named
+# deliberately, and a named file is always loaded (subject only to it being a supported
+# type). To apply different expansion settings to different folders, configure one `Source`
+# per setting — several may be given per loader.
 #
-# Both fields accept a Drive **ID or a share URL** interchangeably; a URL is resolved to its
-# ID via `driveIdFromUrl`.
+# A source with no `items` loads nothing.
+#
+# Entries accept a Drive **ID or a share URL** interchangeably; a URL is resolved to its ID
+# via `driveIdFromUrl`.
 public type Source record {|
-    # The Drive folder to load files from, given either as a folder ID or as a folder share
-    # URL (e.g. `https://drive.google.com/drive/folders/<id>`), from which the ID is
-    # extracted. `()` (the default) selects no folder — use `files` for individual files
-    # instead.
-    string? folder = ();
-    # Individual Drive files to load, regardless of folder. Each entry is either a file ID or
-    # a share URL (e.g. `https://drive.google.com/file/d/<id>/view`, or a Google Docs
-    # `.../d/<id>/edit` URL). An explicitly named file is always loaded and is NOT filtered
-    # by `includeExtensions`. Defaults to `[]`.
-    string[] files = [];
-    # Whether sub-folders under the resolved folder are traversed. Defaults to `false`.
+    # The Drive files and/or folders to load. Each entry is either an ID or a share URL
+    # (e.g. `https://drive.google.com/file/d/<id>/view`, a Google Docs `.../d/<id>/edit`
+    # URL, or `https://drive.google.com/drive/folders/<id>`), from which the ID is
+    # extracted. A file entry is loaded as one document; a folder entry is expanded into
+    # the supported files it contains. Defaults to `[]`, which selects nothing.
+    string[] items = [];
+    # Whether sub-folders under a folder entry are traversed. Has no effect on file
+    # entries. Defaults to `false`.
     boolean recursive = false;
-    # Case-insensitive extension allowlist applied to folder listings only (never to
-    # `files`). Entries may include or omit a leading dot. Defaults to `()`, all types.
+    # Case-insensitive extension allowlist applied to the files found inside a folder entry.
+    # Entries may include or omit a leading dot. Has no effect on a file entry, which is
+    # named deliberately and so is never filtered out. Defaults to `()`, all types.
     # Note: Google Workspace files (Docs/Sheets/Slides) have no file extension, so an
     # extension allowlist naturally excludes them from folder listings.
     string[]? includeExtensions = ();
 |};
 
-// A source with its `folder`/`files` entries already resolved to Drive IDs. Resolution happens
-// in `init`, so a source naming an unparseable URL fails immediately rather than part-way
+// A source with its `items` entries already resolved to Drive IDs. Resolution happens in
+// `init`, so a source naming an unparseable URL fails immediately rather than part-way
 // through a long load, after documents have already been fetched.
+//
+// Whether an entry is a file or a folder is NOT resolved here: that needs the Drive MIME
+// type, and fetching it would turn construction into a network operation whose result could
+// be stale by the time `load` runs. `loadItem` decides it from the metadata it fetches anyway.
 type ResolvedSource record {|
-    string? folderId;
-    string[] fileIds;
+    string[] itemIds;
     boolean recursive;
     string[]? includeExtensions;
 |};
