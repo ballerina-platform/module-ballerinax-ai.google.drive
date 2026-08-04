@@ -27,11 +27,10 @@
 # directly inside it, descending into sub-folders when `recursive`; trashed resources are
 # always excluded.
 #
-# `recursive` and `includeExtensions` shape how a folder entry is expanded, so they have no
-# effect on an entry that turns out to be a file: every entry in `resourceIds` is named
-# deliberately, and a named file is always loaded (subject only to it being a supported
-# type). To apply different expansion settings to different folders, configure one `Source`
-# per setting — several may be given per loader.
+# `recursive` shapes how a folder entry is expanded, so it has no effect on an entry that
+# turns out to be a file: every entry in `resourceIds` is named deliberately, and a named
+# file is always loaded (subject only to it being a supported type). To traverse some folders
+# but not others, configure one `Source` per setting — several may be given per loader.
 #
 # A source with no `resourceIds` loads nothing.
 #
@@ -48,12 +47,6 @@ public type Source record {|
     # Whether sub-folders under a folder entry are traversed. Has no effect on file
     # entries. Defaults to `false`.
     boolean recursive = false;
-    # Case-insensitive extension allowlist applied to the files found inside a folder entry.
-    # Entries may include or omit a leading dot. Has no effect on a file entry, which is
-    # named deliberately and so is never filtered out. When not set, all types are allowed.
-    # Note: Google Workspace files (Docs/Sheets/Slides) have no file extension, so an
-    # extension allowlist naturally excludes them from folder listings.
-    string[] includeExtensions?;
 |};
 
 // A source with its `resourceIds` entries already resolved to Drive IDs — the public field
@@ -67,7 +60,6 @@ public type Source record {|
 type ResolvedSource record {|
     string[] resourceIds;
     boolean recursive;
-    string[]? includeExtensions;
 |};
 
 

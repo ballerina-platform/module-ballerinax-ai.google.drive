@@ -22,17 +22,16 @@ Each `Source` lists what to load in `resourceIds`, by **ID or share URL** — ei
 | --- | --- |
 | `resourceIds` | The files and/or folders to load. Each entry is an ID **or** a share URL (`https://drive.google.com/file/d/<id>/view`, a Docs `.../d/<id>/edit` URL, or `https://drive.google.com/drive/folders/<id>`). A **file** entry becomes one document; a **folder** entry expands into every supported file directly inside it. Trashed items are always excluded. |
 | `recursive` | Whether sub-folders under a folder entry are traversed (default `false`). No effect on file entries. |
-| `includeExtensions` | Case-insensitive extension allowlist applied to the files **found inside a folder entry**. Entries may include or omit a leading dot. No effect on a file entry, which is named deliberately and so is never filtered out. Note: Workspace files have no extension, so an allowlist excludes them from listings. |
 
 Drive draws no distinction between a file and a folder — a folder is simply a file with the folder MIME type, and both are addressed by the same kind of opaque ID — so `resourceIds` draws none either. Which entry is which is settled at **load** time from the Drive MIME type, not from where you put it.
 
-Because `recursive` and `includeExtensions` shape how a *folder* entry expands, group entries that need different expansion settings into separate sources:
+Because `recursive` shapes how a *folder* entry expands, group entries needing different traversal settings into separate sources:
 
 ```ballerina
 [
-    {resourceIds: ["1SpecsFolderId"], recursive: true, includeExtensions: [".md"]},
-    {resourceIds: ["1ReleaseNotesFolderId"]},          // top level only, all types
-    {resourceIds: ["1DocId...", "1PdfId..."]}          // two individual files
+    {resourceIds: ["1SpecsFolderId"], recursive: true},   // whole subtree
+    {resourceIds: ["1ReleaseNotesFolderId"]},             // top level only
+    {resourceIds: ["1DocId...", "1PdfId..."]}             // two individual files
 ]
 ```
 

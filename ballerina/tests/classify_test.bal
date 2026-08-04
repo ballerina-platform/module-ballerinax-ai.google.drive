@@ -184,23 +184,3 @@ isolated function testIsSupported() {
     test:assertFalse(isSupported(UNSUPPORTED));
 }
 
-// ---- matchesExtensionFilter --------------------------------------------------
-
-@test:Config {}
-isolated function testExtensionFilterEmptyMatchesAll() {
-    test:assertTrue(matchesExtensionFilter("a.pdf", ()));
-    test:assertTrue(matchesExtensionFilter("a.png", []));
-}
-
-@test:Config {}
-isolated function testExtensionFilterAllowlist() {
-    test:assertTrue(matchesExtensionFilter("a.pdf", ["pdf"]));
-    test:assertFalse(matchesExtensionFilter("a.txt", ["pdf"]));
-}
-
-@test:Config {}
-isolated function testExtensionFilterCaseInsensitiveAndDotTolerant() {
-    test:assertTrue(matchesExtensionFilter("A.PDF", ["pdf"]), "File extension compared case-insensitively");
-    test:assertTrue(matchesExtensionFilter("a.pdf", [".PDF"]), "Leading dot and case tolerated in the allowlist");
-    test:assertTrue(matchesExtensionFilter("a.md", ["pdf", ".md", "TXT"]));
-}

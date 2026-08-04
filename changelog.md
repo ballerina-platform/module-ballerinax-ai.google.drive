@@ -9,10 +9,13 @@ This file documents all significant changes made to the Ballerina ai.google.driv
 - **Breaking:** `Source.folder` and `Source.files` are replaced by a single `Source.resourceIds` list
   holding files and/or folders in any combination. Drive addresses both by the same kind of
   opaque ID, so an entry's Drive MIME type — not the field it was written in — now decides
-  whether it is fetched as one file or expanded as a folder. `recursive` and `includeExtensions`
-  are unchanged and still shape folder expansion only; use one `Source` per expansion setting.
-  A source that names a folder where a file was intended now loads that folder rather than
-  reporting the mismatch, since the merged field no longer records which kind was expected.
+  whether it is fetched as one file or expanded as a folder. `recursive` is unchanged and still
+  shapes folder expansion only; use one `Source` per traversal setting. A source that names a
+  folder where a file was intended now loads that folder rather than reporting the mismatch,
+  since the merged field no longer records which kind was expected.
+- **Breaking:** `Source.includeExtensions` is removed. Folder listings no longer filter by file
+  extension; every supported file in a listing is loaded. Filter the returned documents by their
+  `fileName` metadata instead, or name the wanted files directly in `resourceIds`.
 
 ## [1.0.0] - 2026-07-30
 

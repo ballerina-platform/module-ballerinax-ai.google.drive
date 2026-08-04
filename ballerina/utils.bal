@@ -400,29 +400,6 @@ isolated function getExtension(string fileName) returns string {
     return fileName.substring(lastDotIndex + 1).toLowerAscii();
 }
 
-# Reports whether a file passes the extension allowlist (`()`/empty matches all). Entries are
-# case-insensitive and a leading dot is optional. Applied only to folder listings.
-#
-# + fileName - the file name to test
-# + includeExtensions - the allowlist, or `()`/`[]` to allow everything
-# + return - `true` when the file is allowed
-isolated function matchesExtensionFilter(string fileName, string[]? includeExtensions) returns boolean {
-    if includeExtensions is () || includeExtensions.length() == 0 {
-        return true;
-    }
-    string extension = getExtension(fileName);
-    foreach string allowed in includeExtensions {
-        string normalized = allowed.toLowerAscii();
-        if normalized.startsWith(".") {
-            normalized = normalized.substring(1);
-        }
-        if normalized == extension {
-            return true;
-        }
-    }
-    return false;
-}
-
 # Parses an RFC 3339 timestamp (as Drive reports `createdTime`/`modifiedTime`) into
 # `time:Utc`, or `()` if absent/unparseable. Drive timestamps look like
 # `2024-01-15T10:30:00.000Z`, which `time:utcFromString` accepts.

@@ -75,11 +75,7 @@ public isolated class TextDataLoader {
                 log:printWarn("A Google Drive source selects nothing and will load no documents; " +
                         "set 'resourceIds'");
             }
-            resolved.push({
-                resourceIds,
-                recursive: src.recursive,
-                includeExtensions: src.includeExtensions
-            });
+            resolved.push({resourceIds, recursive: src.recursive});
         }
         self.sources = resolved.cloneReadOnly();
         self.driveClient = driveConnection is drive:Client
@@ -99,8 +95,7 @@ public isolated class TextDataLoader {
             foreach string resourceId in src.resourceIds {
                 // A file entry yields exactly one document, a folder entry any number, so the
                 // result is spread rather than pushed.
-                ai:Document[] loaded =
-                    check self.loadResource(resourceId, src.recursive, src.includeExtensions);
+                ai:Document[] loaded = check self.loadResource(resourceId, src.recursive);
                 documents.push(...loaded);
             }
         }
@@ -119,8 +114,8 @@ public isolated class TextDataLoader {
     // detection), never silent skips: a trashed resource, an unsupported file type, or content
     // that will not load. Files merely *discovered* inside a named folder keep the listing's
     // skip-and-continue policy — see `listFolder`.
-    private isolated function loadResource(string resourceId, boolean recursive,
-            string[]? includeExtensions) returns ai:Document[]|ai:Error {
+    private isolated function loadResource(string resourceId, boolean recursive)
+            returns ai:Document[]|ai:Error {
         drive:File driveResource = check self.getFileMetadata(resourceId);
         // Checked ahead of the file/folder split because it applies to both: a trashed file
         // cannot be fetched, and a trashed folder lists no children, so without this check a
@@ -128,10 +123,10 @@ public isolated class TextDataLoader {
         if driveResource.trashed == true {
             return error ai:Error(string `ID '${resourceId}' is in the trash and cannot be loaded`);
         }
-        // Folder or file — the only signal is the MIME type. Expansion settings apply solely
-        // to this branch; a file entry is named deliberately and so is never filtered.
+        // Folder or file — the only signal is the MIME type. `recursive` applies solely to
+        // this branch; a file entry names one document and has nothing to expand.
         if driveResource.mimeType == GOOGLE_FOLDER_MIME {
-            return self.listFolder(resourceId, recursive, includeExtensions);
+            return self.listFolder(resourceId, recursive);
         }
         FileClass fileClass = classify(driveResource.mimeType, driveResource.name ?: "");
         if !isSupported(fileClass) {
@@ -158,7 +153,7 @@ public isolated class TextDataLoader {
     // The folder itself is never re-validated here: `loadResource` fetched its metadata to route
     // to this function at all, and a sub-folder reached by recursion came from a listing that
     // already excluded trashed resources and reported its MIME type.
-    private isolated function listFolder(string folderId, boolean recursive, string[]? includeExtensions)
+    private isolated function listFolder(string folderId, boolean recursive)
             returns ai:Document[]|ai:Error {
         drive:File[] children = check self.listChildren(folderId);
 
@@ -169,9 +164,6 @@ public isolated class TextDataLoader {
             string childName = child.name ?: "";
             // Sub-folders are handled in the recursion pass, not as documents.
             if childMime == GOOGLE_FOLDER_MIME {
-                continue;
-            }
-            if !matchesExtensionFilter(childName, includeExtensions) {
                 continue;
             }
             FileClass fileClass = classify(childMime, childName);
@@ -230,7 +222,7 @@ public isolated class TextDataLoader {
                 }
                 string? subFolderId = child.id;
                 if subFolderId is string {
-                    ai:Document[] childDocuments = check self.listFolder(subFolderId, true, includeExtensions);
+                    ai:Document[] childDocuments = check self.listFolder(subFolderId, true);
                     documents.push(...childDocuments);
                 }
             }
