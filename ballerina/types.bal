@@ -50,10 +50,10 @@ public type Source record {|
     boolean recursive = false;
     # Case-insensitive extension allowlist applied to the files found inside a folder entry.
     # Entries may include or omit a leading dot. Has no effect on a file entry, which is
-    # named deliberately and so is never filtered out. Defaults to `()`, all types.
+    # named deliberately and so is never filtered out. When not set, all types are allowed.
     # Note: Google Workspace files (Docs/Sheets/Slides) have no file extension, so an
     # extension allowlist naturally excludes them from folder listings.
-    string[]? includeExtensions = ();
+    string[] includeExtensions?;
 |};
 
 // A source with its `resourceIds` entries already resolved to Drive IDs — the public field
