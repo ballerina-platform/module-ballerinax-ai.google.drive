@@ -49,7 +49,7 @@ public isolated class TextDataLoader {
     # client, token acquisition and refresh likewise stay the caller's concern — the loader
     # only issues requests through the client it is given.
     #
-    # Every source is fully validated here rather than at load time: each `resourceIds` entry
+    # Every source is fully validated here rather than at load time: each `resources` entry
     # is resolved to a Drive ID, so a source naming an unparseable share URL fails immediately
     # instead of part-way through a long load, after documents have already been fetched and
     # then discarded.
@@ -73,7 +73,7 @@ public isolated class TextDataLoader {
             // outcome from a clear failure in one case and total silence in the other.
             if resourceIds.length() == 0 {
                 log:printWarn("A Google Drive source selects nothing and will load no documents; " +
-                        "set 'resourceIds'");
+                        "set 'resources'");
             }
             resolved.push({resourceIds, recursive: src.recursive});
         }
@@ -348,17 +348,17 @@ isolated function childrenQuery(string folderId) returns string {
     return string `'${escaped}' in parents and trashed = false`;
 }
 
-// Resolves a source's `resourceIds` to Drive IDs, each entry being an ID or a share URL of
+// Resolves a source's `resources` to Drive IDs, each entry being an ID or a share URL of
 // either a file or a folder. `driveIdFromUrl` passes a bare ID through unchanged, so one call
 // covers both forms; which kind of thing the ID names is settled at load time from its MIME type.
 //
-// A fresh mutable array is built explicitly — `src.resourceIds` is readonly (sources are stored
+// A fresh mutable array is built explicitly — `src.resources` is readonly (sources are stored
 // via `cloneReadOnly`), and `.clone()` of an immutable value returns it unchanged, so pushing
 // onto a clone would fail with "modification not allowed on readonly value".
 isolated function resolveResourceIds(Source src) returns string[]|ai:Error {
     string[] resourceIds = [];
-    foreach string resourceId in src.resourceIds {
-        resourceIds.push(check driveIdFromUrl(resourceId));
+    foreach string entry in src.resources {
+        resourceIds.push(check driveIdFromUrl(entry));
     }
     return resourceIds;
 }

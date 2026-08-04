@@ -60,21 +60,21 @@ isolated function testInitRejectsEmptySources() {
 isolated function testInitConstructsForFolderSource() returns error? {
     // A bearer-token config constructs offline (no token endpoint call at init).
     drive:ConnectionConfig config = {auth: {token: "ya29.test-access-token"}};
-    TextDataLoader _ = check new (config, [{resourceIds: ["1FolderId"], recursive: true}]);
+    TextDataLoader _ = check new (config, [{resources: ["1FolderId"], recursive: true}]);
 }
 
 @test:Config {}
 isolated function testInitConstructsForFileIdsSource() returns error? {
     drive:ConnectionConfig config = {auth: {token: "ya29.test-access-token"}};
-    TextDataLoader _ = check new (config, [{resourceIds: ["1File", "2File"]}]);
+    TextDataLoader _ = check new (config, [{resources: ["1File", "2File"]}]);
 }
 
 @test:Config {}
 isolated function testInitConstructsForMixedFileAndFolderResources() returns error? {
-    // `resourceIds` draws no distinction between the two: which entry is a file and which is a
+    // `resources` draws no distinction between the two: which entry is a file and which is a
     // folder is settled at load time from the Drive MIME type, so construction accepts any mix.
     drive:ConnectionConfig config = {auth: {token: "ya29.test-access-token"}};
-    TextDataLoader _ = check new (config, [{resourceIds: ["1FolderId", "1FileId"], recursive: true}]);
+    TextDataLoader _ = check new (config, [{resources: ["1FolderId", "1FileId"], recursive: true}]);
 }
 
 // ---- init: reusing a caller-supplied client -----------------------------------
@@ -86,7 +86,7 @@ isolated function testInitAcceptsAnExistingClient() returns error? {
     // is NOT owned by the loader. (A bearer-token client constructs offline.)
     drive:ConnectionConfig config = {auth: {token: "ya29.test-access-token"}};
     drive:Client existingClient = check newDriveClient(config);
-    TextDataLoader _ = check new (existingClient, [{resourceIds: ["1FolderId"], recursive: true}]);
+    TextDataLoader _ = check new (existingClient, [{resources: ["1FolderId"], recursive: true}]);
 }
 
 @test:Config {}
@@ -201,7 +201,7 @@ isolated function testDescribeContentFailureLeavesOtherErrorsAlone() {
 isolated function testInitRejectsUnparseableFolderUrl() {
     drive:ConnectionConfig config = {auth: {token: "ya29.test-access-token"}};
     TextDataLoader|error loader =
-        new (config, [{resourceIds: ["https://drive.google.com/drive/my-drive"]}]);
+        new (config, [{resources: ["https://drive.google.com/drive/my-drive"]}]);
     test:assertTrue(loader is error, "a URL with no extractable ID must fail at init");
 }
 
@@ -209,15 +209,15 @@ isolated function testInitRejectsUnparseableFolderUrl() {
 isolated function testInitRejectsUnparseableFileUrl() {
     drive:ConnectionConfig config = {auth: {token: "ya29.test-access-token"}};
     TextDataLoader|error loader =
-        new (config, [{resourceIds: ["1GoodId", "https://drive.google.com/drive/my-drive"]}]);
-    test:assertTrue(loader is error, "an unparseable entry in 'resourceIds' must fail at init");
+        new (config, [{resources: ["1GoodId", "https://drive.google.com/drive/my-drive"]}]);
+    test:assertTrue(loader is error, "an unparseable entry in 'resources' must fail at init");
 }
 
 @test:Config {}
 isolated function testInitResolvesFolderUrlUpFront() returns error? {
     drive:ConnectionConfig config = {auth: {token: "ya29.test-access-token"}};
     TextDataLoader _ = check new (config,
-            [{resourceIds: ["https://drive.google.com/drive/folders/1Fff?usp=drive_link"]}]);
+            [{resources: ["https://drive.google.com/drive/folders/1Fff?usp=drive_link"]}]);
 }
 
 @test:Config {}

@@ -16,28 +16,28 @@ Because Drive addresses everything by an opaque **ID** (a folder is just a file 
 
 ## The ID-based `Source` model
 
-Each `Source` lists what to load in `resourceIds`, by **ID or share URL** — either form, interchangeably, in any combination:
+Each `Source` lists what to load in `resources`, by **ID or share URL** — either form, interchangeably, in any combination:
 
 | Field | Meaning |
 | --- | --- |
-| `resourceIds` | The files and/or folders to load. Each entry is an ID **or** a share URL (`https://drive.google.com/file/d/<id>/view`, a Docs `.../d/<id>/edit` URL, or `https://drive.google.com/drive/folders/<id>`). A **file** entry becomes one document; a **folder** entry expands into every supported file directly inside it. Trashed items are always excluded. |
+| `resources` | The files and/or folders to load. Each entry is an ID **or** a share URL (`https://drive.google.com/file/d/<id>/view`, a Docs `.../d/<id>/edit` URL, or `https://drive.google.com/drive/folders/<id>`). A **file** entry becomes one document; a **folder** entry expands into every supported file directly inside it. Trashed items are always excluded. |
 | `recursive` | Whether sub-folders under a folder entry are traversed (default `false`). No effect on file entries. |
 
-Drive draws no distinction between a file and a folder — a folder is simply a file with the folder MIME type, and both are addressed by the same kind of opaque ID — so `resourceIds` draws none either. Which entry is which is settled at **load** time from the Drive MIME type, not from where you put it.
+Drive draws no distinction between a file and a folder — a folder is simply a file with the folder MIME type, and both are addressed by the same kind of opaque ID — so `resources` draws none either. Which entry is which is settled at **load** time from the Drive MIME type, not from where you put it.
 
 Because `recursive` shapes how a *folder* entry expands, group entries needing different traversal settings into separate sources:
 
 ```ballerina
 [
-    {resourceIds: ["1SpecsFolderId"], recursive: true},   // whole subtree
-    {resourceIds: ["1ReleaseNotesFolderId"]},             // top level only
-    {resourceIds: ["1DocId...", "1PdfId..."]}             // two individual files
+    {resources: ["1SpecsFolderId"], recursive: true},   // whole subtree
+    {resources: ["1ReleaseNotesFolderId"]},             // top level only
+    {resources: ["1DocId...", "1PdfId..."]}             // two individual files
 ]
 ```
 
-A source with no `resourceIds` loads nothing, and logs a warning saying so.
+A source with no `resources` loads nothing, and logs a warning saying so.
 
-Every source is validated when the loader is **constructed**, not when `load()` runs: each `resourceIds` entry is resolved to a Drive ID up front, so a configuration mistake fails immediately rather than part-way through a long load. Whether an ID names a file or a folder is *not* resolved then — that needs a Drive round trip, and its answer could be stale by the time `load()` runs.
+Every source is validated when the loader is **constructed**, not when `load()` runs: each `resources` entry is resolved to a Drive ID up front, so a configuration mistake fails immediately rather than part-way through a long load. Whether an ID names a file or a folder is *not* resolved then — that needs a Drive round trip, and its answer could be stale by the time `load()` runs.
 
 > **IDs vs URLs:** internally the loader is ID-based; accepting a URL is a convenience — a bare
 > ID is passed through unchanged, and a URL is reduced to the same ID. A folder ID is the last
@@ -78,7 +78,7 @@ A scanned PDF is page *images* in a PDF container, and a blank PDF has no conten
 The two selection modes differ deliberately:
 
 - A file **discovered in a folder listing** that cannot be loaded — for any reason: a text-less PDF, content that will not decode, an export above Drive's size cap, a file flagged as abusive, a permissions error on that one file — is **skipped with a logged warning, and the walk continues**. One unreadable file never discards the documents already collected, nor abandons the rest of the folder. When anything was skipped, a per-folder summary records how many loaded and how many did not.
-- An item **named explicitly** in `resourceIds` that cannot be loaded is an **`ai:Error`**. Naming something expresses intent, so failing to load it is a mistake worth reporting rather than a silent skip. This covers a missing or trashed ID, an unsupported file type, and content that will not decode or extract.
+- An item **named explicitly** in `resources` that cannot be loaded is an **`ai:Error`**. Naming something expresses intent, so failing to load it is a mistake worth reporting rather than a silent skip. This covers a missing or trashed ID, an unsupported file type, and content that will not decode or extract.
 
 The same asymmetry applies to unsupported types and trashed files.
 
@@ -133,9 +133,9 @@ public function main() returns error? {
     drive:TextDataLoader loader = check new (connectionConfig, [
         // A whole folder, descending into its sub-folders, plus two individual files
         // (e.g. a Google Doc and a PDF) — folders and files go in the same list.
-        {resourceIds: ["1AbCdEfGhIjKlMnOpQrStUvWxYz", "1DocId...", "1PdfId..."], recursive: true},
+        {resources: ["1AbCdEfGhIjKlMnOpQrStUvWxYz", "1DocId...", "1PdfId..."], recursive: true},
         // …or paste share URLs directly — the same field accepts them, either kind:
-        {resourceIds: [
+        {resources: [
             "https://drive.google.com/drive/folders/1FolderId...",
             "https://drive.google.com/file/d/1FileId.../view"
         ]}
@@ -157,7 +157,7 @@ drive:Client existingClient = check new (connectionConfig);
 // … your own Drive calls …
 
 drive:TextDataLoader loader = check new (existingClient, [
-    {resourceIds: ["1SpecsFolderId"], recursive: true}
+    {resources: ["1SpecsFolderId"], recursive: true}
 ]);
 ```
 
@@ -175,7 +175,7 @@ provider), not from `ballerina/ai` itself, so substitute the ones you use:
 
 ```ballerina
 drive:TextDataLoader loader = check new (connectionConfig, [
-    {resourceIds: ["1SpecsFolderId"], recursive: true}
+    {resources: ["1SpecsFolderId"], recursive: true}
 ]);
 
 // `AUTO` lets the knowledge base pick a chunker per document type — Markdown loaded from Drive
@@ -249,7 +249,7 @@ Each document's `ai:Metadata` is populated from the Drive file metadata:
 - **Export size limit:** Google caps a single export at 10 MB. This applies only to Workspace natives (Docs/Sheets/Slides). An export that exceeds it is reported by name rather than as raw Drive JSON.
 - **No OCR.** Text-less PDFs (scanned/image-only or blank) are *detected* and reported, not read — the loader ships no OCR engine.
 - **GraalVM native image is not supported yet.** `graalvmCompatible` is `false`: the Apache POI / XMLBeans / Tika stack is reflection- and resource-driven, and the native-image metadata for it has not been generated and verified.
-- **No de-duplication.** The same file named twice in `resourceIds`, or named explicitly *and* also reached through a loaded folder, yields one document per occurrence.
+- **No de-duplication.** The same file named twice in `resources`, or named explicitly *and* also reached through a loaded folder, yields one document per occurrence.
 - **No cycle or depth guard on recursion.** Drive has been single-parent since 2020, so a folder cycle is not constructible today, but there is no `maxDepth` limit.
 - **Embedded objects inside Office files** (thumbnails, OLE attachments) are intentionally not recursed into — only the document's own text is extracted.
 - **Encrypted or password-protected documents** are not decrypted.
