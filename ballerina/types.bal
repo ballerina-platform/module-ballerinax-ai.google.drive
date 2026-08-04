@@ -46,7 +46,7 @@ public type Source record {|
     # extracted. A file entry is loaded as one document; a folder entry is expanded into
     # the supported files it contains. Defaults to `[]`, which selects nothing.
     string[] resources = [];
-    # The recursive is applicable only when the `resources` entry is a folder. It determines
+    # The recursive is applicable only when the `resources` entry has a folder. It determines
     # whether to traverse sub-folders. Defaults to `false`.
     boolean recursive = false;
 |};
