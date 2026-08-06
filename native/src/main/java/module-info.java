@@ -21,6 +21,4 @@ module io.ballerina.lib.ai.google.drive {
     requires org.apache.tika.core;
     requires org.apache.tika.parser.microsoft;
     requires org.apache.tika.parser.pdf;
-
-    exports io.ballerina.lib.ai.google.drive;
 }
