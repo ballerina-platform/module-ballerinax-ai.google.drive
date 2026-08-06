@@ -19,23 +19,23 @@
 # Unlike a filesystem or Azure Files share, Drive has **no path tree**: every file and
 # folder is addressed by an opaque, stable **ID** (a folder is simply a file whose MIME
 # type is `application/vnd.google-apps.folder`). A `Source` therefore selects content by
-# ID: list the files and/or folders to load in `resources`, in any combination.
+# ID: list the files and/or folders to load in `fileOrFolderIds`, in any combination.
 #
-# Because Drive draws no distinction between the two, neither does `resources` — each entry
-# is resolved to an ID up front, and its Drive MIME type decides at load time whether it is
-# fetched as a single file or listed as a folder. A folder entry loads every supported file
+# Because Drive draws no distinction between the two, neither does `fileOrFolderIds` — each
+# entry is resolved to an ID up front, and its Drive MIME type decides at load time whether it
+# is fetched as a single file or listed as a folder. A folder entry loads every supported file
 # directly inside it, descending into sub-folders when `recursive`; trashed resources are
 # always excluded.
 #
 # `recursive` shapes how a folder entry is expanded, so it has no effect on an entry that
-# turns out to be a file. Every entry in `resources` is named deliberately, so failing to
+# turns out to be a file. Every entry in `fileOrFolderIds` is named deliberately, so failing to
 # load one — a missing or trashed ID, an unsupported type, or content that cannot be read —
 # is reported as an error rather than skipped; a file merely *discovered* inside a folder
 # entry is skipped with a warning instead, so one unreadable file does not abandon the walk.
 # To traverse some folders but not others, configure one `Source` per setting — several may
 # be given per loader.
 #
-# A source with no `resources` loads nothing.
+# A source with no `fileOrFolderIds` loads nothing.
 #
 # Entries accept a Drive **ID or a share URL** interchangeably; a URL is resolved to its ID
 # via `driveIdFromUrl`.
@@ -45,13 +45,15 @@ public type Source record {|
     # URL, or `https://drive.google.com/drive/folders/<id>`), from which the ID is
     # extracted. A file entry is loaded as one document; a folder entry is expanded into
     # the supported files it contains. Defaults to `[]`, which selects nothing.
-    string[] resources = [];
-    # The recursive is applicable only when the `resources` entry has a folder. It determines
-    # whether to traverse sub-folders. Defaults to `false`.
+    @display {label: "File IDs/File URLs or Folder IDs/Folder URLs"}
+    string[] fileOrFolderIds = [];
+    # The recursive is applicable only when the `fileOrFolderIds` entry has a folder. It
+    # determines whether to traverse sub-folders. Defaults to `false`.
+    @display {label: "Include Sub-folders"}
     boolean recursive = false;
 |};
 
-// A source with its `resources` entries already resolved to Drive IDs — the public field
+// A source with its `fileOrFolderIds` entries already resolved to Drive IDs — the public field
 // also accepts share URLs, so the two are not the same values. Resolution happens in `init`,
 // so a source naming an unparseable URL fails immediately rather than part-way through a long
 // load, after documents have already been fetched.
