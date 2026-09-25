@@ -71,7 +71,7 @@ spotbugsMain {
     // `Confidence` is a Kotlin enum whose constants have class bodies, so Groovy resolves
     // `Confidence.LOW` to the nested class rather than the constant; look it up by name.
     reportLevel = Confidence.valueOf('LOW')
-    reportsDir = file("$project.buildDir/reports/spotbugs")
+    reportsDir = layout.buildDirectory.dir("reports/spotbugs")
     reports {
         html.required.set(true)
         text.required.set(true)
