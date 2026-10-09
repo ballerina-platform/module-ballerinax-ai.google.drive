@@ -39,10 +39,6 @@ dependencies {
     implementation group: 'org.apache.tika', name: 'tika-parser-microsoft-module', version: "${tikaVersion}"
 }
 
-java {
-    sourceCompatibility = JavaVersion.VERSION_21
-    targetCompatibility = JavaVersion.VERSION_21
-}
 
 // The WSO2 checkstyle rules are downloaded by the `:checkstyle` project rather than committed,
 // so they do not exist until `:checkstyle:downloadCheckstyleRuleFiles` has run — which the task
