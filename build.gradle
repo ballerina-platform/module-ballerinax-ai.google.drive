@@ -59,7 +59,7 @@ def moduleVersion = project.version.replace("-SNAPSHOT", "")
 
 // The Ballerina sub-project already declares `build.dependsOn ':ai.google.drive-native:build'`
 // (ballerina/build.gradle), which both pulls in the native jar and imposes the build ordering.
-task build {
+tasks.named('build') {
     dependsOn(':ai.google.drive-ballerina:build')
 }
 

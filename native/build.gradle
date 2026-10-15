@@ -39,10 +39,6 @@ dependencies {
     implementation group: 'org.apache.tika', name: 'tika-parser-microsoft-module', version: "${tikaVersion}"
 }
 
-java {
-    sourceCompatibility = JavaVersion.VERSION_21
-    targetCompatibility = JavaVersion.VERSION_21
-}
 
 // The WSO2 checkstyle rules are downloaded by the `:checkstyle` project rather than committed,
 // so they do not exist until `:checkstyle:downloadCheckstyleRuleFiles` has run — which the task
@@ -71,7 +67,7 @@ spotbugsMain {
     // `Confidence` is a Kotlin enum whose constants have class bodies, so Groovy resolves
     // `Confidence.LOW` to the nested class rather than the constant; look it up by name.
     reportLevel = Confidence.valueOf('LOW')
-    reportsDir = file("$project.buildDir/reports/spotbugs")
+    reportsDir = layout.buildDirectory.dir("reports/spotbugs")
     reports {
         html.required.set(true)
         text.required.set(true)
